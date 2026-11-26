@@ -151,6 +151,7 @@ export function AppView() {
   const [editingDraft, setEditingDraft] = useState<string>('');
   const [composerText, setComposerText] = useState<string>('');
   const [pendingSend, setPendingSend] = useState<string | null>(null);
+  const pendingBaseTurnCountRef = useRef<number>(0);
   const [showOptions, setShowOptions] = useState<boolean>(true);
   const [cardFrontend, setCardFrontend] = useState<CardFrontendPayload | null>(null);
   const [enableRegexBeautify, setEnableRegexBeautify] = useState<boolean>(true);
@@ -240,6 +241,44 @@ export function AppView() {
     }
   }, [data?.storyTurns?.length, pendingSend, tab]);
 
+  // Lightweight auto-poll ONLY while waiting for a reply so the user never has to click Refresh manually
+  useEffect(() => {
+    if (!pendingSend) return;
+    let cancelled = false;
+    let ticks = 0;
+    const timer = window.setInterval(async () => {
+      if (cancelled) return;
+      ticks += 1;
+      if (ticks > 60) {
+        // Stop polling after ~2.5 minutes
+        window.clearInterval(timer);
+        return;
+      }
+      const app = appRef.current;
+      if (!app) return;
+      try {
+        const res = await app.callServerTool({ name: 'tavern_app_bootstrap', arguments: {} });
+        const sc = res?.structuredContent as BootstrapData | undefined;
+        if (!cancelled && sc && sc.config) {
+          const newCount = sc.storyTurns?.length ?? 0;
+          if (newCount > pendingBaseTurnCountRef.current) {
+            setData(sc);
+            setPendingSend(null);
+            setStatusMsg(`已自动同步第 #${newCount} 楼正文`);
+            window.clearInterval(timer);
+          }
+        }
+      } catch {
+        // ignore transient poll errors
+      }
+    }, 2500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [pendingSend]);
+
   async function callTool(name: string, args: Record<string, unknown>): Promise<BootstrapData | undefined> {
     const app = appRef.current;
     if (!app) return undefined;
@@ -268,8 +307,9 @@ export function AppView() {
       return;
     }
     setComposerText('');
+    pendingBaseTurnCountRef.current = data?.storyTurns?.length ?? 0;
     setPendingSend(text);
-    setStatusMsg('已发送，等待角色落笔回应...');
+    setStatusMsg('已发送，等待角色落笔回应（完成后将自动同步）...');
     try {
       await app.sendMessage({
         role: 'user',
@@ -444,7 +484,7 @@ export function AppView() {
           预设 ({data.presets.length})
         </button>
         <button className={`tab-btn ${tab === 'lorebooks' ? 'active' : ''}`} onClick={() => setTab('lorebooks')}>
-          世界书 ({data.lorebooks.length})
+          世界书 ({data.lorebooks.length + (activeCard?.hasEmbeddedLorebook ? 1 : 0)})
         </button>
         <button className={`tab-btn ${tab === 'state' ? 'active' : ''}`} onClick={() => setTab('state')}>
           状态

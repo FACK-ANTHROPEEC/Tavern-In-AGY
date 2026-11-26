@@ -175,13 +175,13 @@ function preprocessNativeTags(raw: string): string {
   // or fold it cleanly into a native details card
   out = out.replace(/<(?:wave_options|options)>\s*([\s\S]*?)\s*<\/(?:wave_options|options)>/gi, (_m, inner: string) => {
     const safe = escapeHtmlText(inner.trim()).replace(/\n/g, '<br/>');
-    return `\n<details class="cot-details"><summary>🧭 备选走法</summary><div class="cot-body">${safe}</div></details>\n`;
+    return `\n<details><summary>🧭 备选走法</summary><div class="cot-body">${safe}</div></details>\n`;
   });
   for (const { tag, label } of NATIVE_COT_TAGS) {
     const re = new RegExp(`<${tag}~?>\\s*([\\s\\S]*?)\\s*<\\/${tag}~?>`, 'gi');
     out = out.replace(re, (_m, inner: string) => {
       const safe = escapeHtmlText(inner.trim()).replace(/\n/g, '<br/>');
-      return `\n<details class="cot-details"><summary>${label}</summary><div class="cot-body">${safe}</div></details>\n`;
+      return `\n<details><summary>${label}</summary><div class="cot-body">${safe}</div></details>\n`;
     });
   }
   return out;

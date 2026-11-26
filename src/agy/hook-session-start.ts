@@ -41,6 +41,14 @@ async function main(): Promise<void> {
 
   const convId = payload.conversationId || 'default';
   const session = storage.getSession(convId);
+  // Sync latest live state & MVU statData written by MCP server ('default' shared store)
+  if (convId !== 'default') {
+    const shared = storage.getSession('default');
+    session.state = { ...session.state, ...shared.state };
+    if (shared.statData && Object.keys(shared.statData).length > 0) {
+      session.statData = { ...shared.statData };
+    }
+  }
 
   // Always auto-resume existing story turns for the active card (or pending fork if staged)
   let resumedStoryBlock = '';

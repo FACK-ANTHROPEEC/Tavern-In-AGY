@@ -52,9 +52,22 @@ async function main(): Promise<void> {
   const convId = payload.conversationId || 'default';
   const session = storage.getSession(convId);
 
-  // Deduplicate multiple model invocations within the same user turn
+  // Sync latest live state & MVU statData written by MCP server ('default' shared store)
+  if (convId !== 'default') {
+    const shared = storage.getSession('default');
+    session.state = { ...session.state, ...shared.state };
+    if (shared.statData && Object.keys(shared.statData).length > 0) {
+      session.statData = { ...shared.statData };
+    }
+  }
+
+  // Deduplicate multiple model invocations within the SAME user turn (invocationNum > 1),
+  // without blocking the user from sending the same short message (e.g. "继续") on a new turn.
   const inputHash = hashText(lastUserInput);
-  if (session.lastUserInputHash === inputHash) {
+  if (
+    session.lastUserInputHash === inputHash &&
+    (payload.invocationNum === undefined || payload.invocationNum > 1)
+  ) {
     process.stdout.write(JSON.stringify({}));
     return;
   }
