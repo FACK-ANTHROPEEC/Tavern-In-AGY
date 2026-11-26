@@ -45,9 +45,126 @@ body {
 .app-shell {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  padding: 10px;
+  height: 100vh;
+  overflow: hidden;
+  padding: 8px;
+  gap: 6px;
+}
+
+.main-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  padding-right: 2px;
+}
+
+.mvu-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 5px 10px;
+  background: var(--ink-header);
+  border: 1px solid var(--ink-border);
+  border-radius: 2px;
+  font-size: 11.5px;
+  color: var(--ink-text-muted);
+}
+
+.mvu-strip span strong {
+  color: var(--ink-text);
+  font-weight: 500;
+}
+
+.chat-stream {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px 8px 0;
+}
+
+.user-bubble {
+  padding: 8px 12px;
+  background: rgba(184, 163, 131, 0.08);
+  border: 1px solid var(--ink-border);
+  border-left: 2px solid var(--ink-accent);
+  border-radius: 2px;
+  font-size: 13px;
+  color: var(--ink-text);
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.floor-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.45;
+  transition: opacity 0.15s ease;
+}
+
+.story-paper:hover .floor-actions {
+  opacity: 1;
+}
+
+.btn-xs {
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+.composer-dock {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--ink-border);
+  background: var(--ink-bg);
+}
+
+.options-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 130px;
+  overflow-y: auto;
+}
+
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.composer-input {
+  flex: 1;
+  min-height: 44px;
+  max-height: 120px;
+  resize: none;
+  background: var(--ink-header);
+  color: var(--ink-text-bright);
+  border: 1px solid var(--ink-border-strong);
+  border-radius: 2px;
+  padding: 8px 10px;
+  font-family: var(--font-serif);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.composer-input:focus {
+  outline: none;
+  border-color: var(--ink-accent);
+}
+
+.composer-send {
+  height: 44px;
+  padding: 0 14px;
+  white-space: nowrap;
 }
 
 .header {

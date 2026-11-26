@@ -96,7 +96,7 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
 
 const server = new McpServer({
   name: 'tavern-in-agy',
-  version: '0.4.1',
+  version: '0.5.0',
 });
 
 // UI Resource (SEP-1865 MCP App)
