@@ -2,12 +2,13 @@
 
 ## 1. 当前状态与里程碑
 - **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agent `tavern-rp`）打造的 SillyTavern 全通用兼容 Roleplay 引擎，零反代、零凭据抽取。
-- **当前阶段**：**v0.7.2**（单窗口子智能体导演模式 `tavern-director` + `injectSteps` 分块防截断 + 侧边栏单通道交付）已完成测试、构建与安装（Git 标签 `v0.1.0`～`v0.7.2`）。
+- **当前阶段**：**v0.7.2+**（`tavern-director` 单窗口子智能体导演模式 + `injectSteps` 12KB 分块防截断 + 宽容 Schema 单轮直出提速）已完成实机跑通、测试与安装（最新提交 `9a52896`）。
 - **最近完成**：
-  - 新增 **单窗口导演模式（`tavern-director` + `directorMode`）**：主窗口每轮零注入、不新增左侧历史会话，自动派发全新 `tavern-rp` 子智能体全量重拼上下文落笔并写完即毁；`PreInvocation` 在导演模式下仅缓存用户输入供子智能体 `SessionStart` 扫描动态世界书；
-  - 新增 **Hook `injectSteps` 分块防截断**（`splitIntoInjectChunks`, ≤12 KB/块），彻底解决 Antigravity 单条 `systemMessage` ~20 KB 截断导致后置指令与交付规则丢失的问题；
-  - 保留备选 **无状态单轮模式（`statelessPerTurn`）**、零脚本原生 `<details><summary>` 折叠 CoT、2.5s 自动轮询同步与角色卡内嵌世界书独立开关。
-- **验证状态**：`npm test` 7 套件 / 28 项测试全绿；`npm run build`（`dist/ui/index.html` `553.59 kB`）与 `npm run install:plugin` 通过。
+  - 单窗口导演模式闭环：`tavern-director.md` 声明 `mainAgent: true` + `tools: [invoke_subagent, manage_subagents, send_message]`；`PreInvocation` 写入 60s TTL `pendingDirectorInput` 并仅注入 1 行防跑偏提醒；`SessionStart` 在导演模式下仅由子智能体消费解锁，主窗口 0 字节设定污染；
+  - `splitIntoInjectChunks`（≤12 KB/块）彻底消除 Antigravity ~20 KB 单条 Hook 截断（实测 11 块 0 截断）；
+  - `tavern_commit_turn` 全面宽容 Zod Schema + `tavern-rp.md` 内联工具签名并禁止动笔前查库，消除报错重写与多余思考轮次；
+  - 已同步更新权威开发手册 `DEVELOPMENT.md`（覆盖全部架构、避坑铁律与 v0.8.0 摘要模块设计）。
+- **验证状态**：`npm test` 7 套件 / 28 项测试全绿；`npm run build` 与 `npm run install:plugin` 通过。
 
 ## 2. 架构约束与关键契约
 - **目录与分层红线**：
