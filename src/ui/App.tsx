@@ -153,8 +153,45 @@ export function AppView() {
     appRef.current = app;
 
     app.ontoolresult = (result) => {
-      const sc = result?.structuredContent as BootstrapData | undefined;
-      if (sc && sc.config) {
+      const sc = result?.structuredContent as
+        | (BootstrapData & { delta?: false })
+        | {
+            delta: true;
+            committedTurn?: StoryTurnItem;
+            sessionState?: LiveState;
+            statData?: Record<string, unknown>;
+            latestOptions?: WaveOption[];
+          }
+        | undefined;
+      if (!sc) return;
+
+      if ('delta' in sc && sc.delta) {
+        setData((prev) => {
+          if (!prev) return prev;
+          const nextTurns = sc.committedTurn
+            ? [
+                ...prev.storyTurns.filter((t) => t.turnId !== sc.committedTurn!.turnId),
+                sc.committedTurn,
+              ].slice(-50)
+            : prev.storyTurns;
+          return {
+            ...prev,
+            storyTurns: nextTurns,
+            sessionState: sc.sessionState ?? prev.sessionState,
+            statData: sc.statData ?? prev.statData,
+            latestOptions: sc.latestOptions ?? prev.latestOptions,
+          };
+        });
+        setPendingSend(null);
+        setStatusMsg(
+          sc.committedTurn
+            ? `已同步第 #${sc.committedTurn.index} 楼与最新状态`
+            : '正文与 MVU 状态已同步',
+        );
+        return;
+      }
+
+      if ('config' in sc && sc.config) {
         setData((prev) => ({
           ...sc,
           activeDisplayRegexScripts: sc.activeDisplayRegexScripts ?? prev?.activeDisplayRegexScripts,
@@ -1087,6 +1124,26 @@ export function AppView() {
                 {data.sessionState.summary && (
                   <div className="muted">摘要：{data.sessionState.summary}</div>
                 )}
+              </div>
+
+              <div className="card-box">
+                <strong>上下文与省额度策略（AGY 缓存优化）</strong>
+                <div className="row">
+                  <span className="muted">预设后半段周期提醒（0 = 仅首轮钉死，最省额度）</span>
+                  <input
+                    type="number"
+                    className="input"
+                    style={{ width: 72 }}
+                    min={0}
+                    max={50}
+                    value={data.config.postHistoryRefreshInterval}
+                    onChange={(e) =>
+                      callTool('tavern_app_update_config', {
+                        postHistoryRefreshInterval: Math.max(0, Number(e.target.value) || 0),
+                      })
+                    }
+                  />
+                </div>
               </div>
 
               <div className="card-box">

@@ -294,7 +294,7 @@ server.registerTool(
       options: normalizedOptions.length > 0 ? normalizedOptions : undefined,
     });
 
-    const payload = buildBootstrapPayload({ omitAvatars: true });
+    // Return a slim delta payload (~1 KB instead of full bootstrap) to keep conversation trajectory lean
     return {
       content: [
         {
@@ -302,7 +302,13 @@ server.registerTool(
           text: `Committed turn #${turn.index} (${turn.turnId}). MVU patches applied: ${mvuRes.appliedCount}.`,
         },
       ],
-      structuredContent: payload,
+      structuredContent: {
+        delta: true,
+        committedTurn: turn,
+        sessionState: session.state,
+        statData: session.statData ?? {},
+        latestOptions: session.latestOptions,
+      },
     };
   },
 );

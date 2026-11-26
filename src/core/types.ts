@@ -201,7 +201,7 @@ export function createDefaultConfig(): TavernConfig {
     activeLorebookIds: [],
     cooldownTurns: 12,
     stateRefreshInterval: 3,
-    postHistoryRefreshInterval: 1,
+    postHistoryRefreshInterval: 0,
     enablePostHistoryInjection: true,
   };
 }

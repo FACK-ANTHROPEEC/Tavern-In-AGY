@@ -114,6 +114,11 @@ export function assembleSessionStart(params: {
     if (compiled.staticText) {
       parts.push(compiled.staticText);
     }
+    // Pin post-history rules once at SessionStart so they live in the high-attention prefix
+    // and benefit from 100% KV-cache hits without being duplicated on every turn.
+    if (config.enablePostHistoryInjection && compiled.postHistoryText) {
+      parts.push(compiled.postHistoryText);
+    }
     Object.assign(ctx.vars, compiled.variables);
   } else {
     if (wiBefore) parts.push(`[World Info]\n${wiBefore}`);
@@ -124,7 +129,14 @@ export function assembleSessionStart(params: {
     if (config.userPersona) parts.push(`[User Persona: ${ctx.user}]\n${renderText(config.userPersona)}`);
     if (wiAfter) parts.push(`[Additional World Info]\n${wiAfter}`);
     if (slots.dialogueExamples) parts.push(`[Dialogue Examples]\n${slots.dialogueExamples}`);
+    if (config.enablePostHistoryInjection && card.postHistoryInstructions.trim()) {
+      parts.push(renderText(card.postHistoryInstructions).trim());
+    }
   }
+
+  parts.push(
+    '[TavernInAGY Delivery] Put your full turn output (including any preset CoT/formatting tags and story prose) inside `tavern_commit_turn(narrative)`. Do not repeat story prose in main chat; end main chat with only a 1-line floor index (e.g., `✦ 第 #N 楼已落笔至侧边栏`).',
+  );
 
   if (card.firstMessage) {
     parts.push(`[Opening Scene Reference]\n${renderText(card.firstMessage)}`);
@@ -223,12 +235,12 @@ export function assemblePreInvocation(params: {
     parts.push(`[Triggered World Info]\n${loreText}`);
   }
 
-  // L3a: Post-history preset anchor (refreshed per postHistoryRefreshInterval)
+  // L3a: Optional periodic post-history refresh (0 = pinned once in SessionStart for max KV cache & zero redundancy)
   let injectedPostHistory = false;
   const shouldRefreshPostHistory =
     config.enablePostHistoryInjection &&
-    (session.lastPostHistoryTurn === 0 ||
-      nextTurn - session.lastPostHistoryTurn >= Math.max(1, config.postHistoryRefreshInterval));
+    config.postHistoryRefreshInterval > 0 &&
+    nextTurn - session.lastPostHistoryTurn >= config.postHistoryRefreshInterval;
 
   if (shouldRefreshPostHistory) {
     if (preset) {
@@ -244,7 +256,7 @@ export function assemblePreInvocation(params: {
     }
   }
 
-  // L3b: Compact live state anchor (only if state changed or refresh interval reached)
+  // L3b: Compact live state anchor (only if state changed)
   const compactState = formatCompactState(session.state, card.name);
   const stateHash = hashText(compactState);
   let injectedState = false;
@@ -252,11 +264,6 @@ export function assemblePreInvocation(params: {
     parts.push(compactState);
     injectedState = true;
   }
-
-  // L3c: Single-delivery side-pane output contract (keeps main chat clean & avoids duplicate prose)
-  parts.push(
-    '[TavernInAGY Delivery] Put your full turn output (including any preset CoT/formatting tags and story prose) inside `tavern_commit_turn(narrative)`. Do not repeat story prose in main chat; end main chat with only a 1-line floor index (e.g., `✦ 第 #N 楼已落笔至侧边栏`).',
-  );
 
   return {
     systemMessage: parts.filter(Boolean).join('\n\n'),
