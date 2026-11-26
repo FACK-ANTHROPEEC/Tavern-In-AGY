@@ -1,6 +1,11 @@
 ---
 name: tavern-director
 description: "TavernInAGY 单窗口导演模式：主窗口零污染调度器，每轮自动派发一个全新干净的 tavern-rp 子智能体完成落笔并调用 tavern_commit_turn，写完立即销毁子智能体，彻底告别左侧多会话刷屏。"
+mainAgent: true
+tools:
+  - invoke_subagent
+  - manage_subagents
+  - send_message
 ---
 
 # TavernInAGY Single-Window Director (`tavern-director`)
