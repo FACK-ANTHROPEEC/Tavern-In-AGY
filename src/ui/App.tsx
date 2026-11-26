@@ -111,6 +111,7 @@ interface TavernConfig {
   cooldownTurns: number;
   postHistoryRefreshInterval: number;
   enablePostHistoryInjection: boolean;
+  statelessPerTurn?: boolean;
 }
 
 interface BootstrapData {
@@ -222,6 +223,13 @@ export function AppView() {
       }
     };
 
+    app.onhostcontextchanged = () => {
+      const caps = app.getHostCapabilities();
+      if (caps) {
+        setCanMessage('message' in caps);
+      }
+    };
+
     app
       .connect()
       .then(async () => {
@@ -282,6 +290,10 @@ export function AppView() {
   async function callTool(name: string, args: Record<string, unknown>): Promise<BootstrapData | undefined> {
     const app = appRef.current;
     if (!app) return undefined;
+    const caps = app.getHostCapabilities();
+    if (caps) {
+      setCanMessage('message' in caps);
+    }
     try {
       const res = await app.callServerTool({ name, arguments: args });
       const sc = res?.structuredContent as BootstrapData | undefined;
@@ -303,18 +315,30 @@ export function AppView() {
     if (!text) return;
     const app = appRef.current;
     if (!app || !canMessage) {
-      setStatusMsg('当前视图不支持直发消息，请在右侧边栏模式打开 TavernInAGY。');
+      setStatusMsg('左侧尚未建立对话：请先在左侧发送第一句，再重开或刷新此面板以启用直聊。');
       return;
     }
+    const useStateless = Boolean(data?.config.statelessPerTurn);
     setComposerText('');
     pendingBaseTurnCountRef.current = data?.storyTurns?.length ?? 0;
     setPendingSend(text);
-    setStatusMsg('已发送，等待角色落笔回应（完成后将自动同步）...');
+    setStatusMsg(
+      useStateless
+        ? '已按无状态单轮模式拉起全新上下文，等待角色落笔（完成后自动同步）...'
+        : '已发送，等待角色落笔回应（完成后将自动同步）...',
+    );
     try {
-      await app.sendMessage({
-        role: 'user',
-        content: [{ type: 'text', text }],
-      });
+      const payload = useStateless
+        ? ({
+            role: 'user',
+            content: [{ type: 'text', text }],
+            _meta: { 'com.google.antigravity/message': { target: 'new' } },
+          } as Parameters<App['sendMessage']>[0])
+        : {
+            role: 'user' as const,
+            content: [{ type: 'text' as const, text }],
+          };
+      await app.sendMessage(payload);
     } catch (err) {
       setPendingSend(null);
       setStatusMsg(`发送失败: ${String(err)}`);
@@ -694,8 +718,10 @@ export function AppView() {
                 className="composer-input"
                 placeholder={
                   canMessage
-                    ? '在此直接输入你的行动或对话…（Enter 发送，Shift+Enter 换行）'
-                    : '请在右侧边栏模式打开以启用直聊发送'
+                    ? data.config.statelessPerTurn
+                      ? '无状态单轮模式：每句自动新开干净上下文全量重拼…（Enter 发送）'
+                      : '在此直接输入你的行动或对话…（Enter 发送，Shift+Enter 换行）'
+                    : '左侧尚未建立对话：请先在左侧发送第一句，再重开本面板即可启用直聊'
                 }
                 value={composerText}
                 disabled={!canMessage}
@@ -721,6 +747,17 @@ export function AppView() {
                 {statusMsg}
               </span>
               <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <button
+                  className={`btn btn-xs ${data.config.statelessPerTurn ? 'btn-primary' : ''}`}
+                  onClick={() =>
+                    callTool('tavern_app_update_config', {
+                      statelessPerTurn: !data.config.statelessPerTurn,
+                    })
+                  }
+                  title="每轮自动新开后台会话并全量重拼预设+开场白+历史楼层（原版酒馆无状态模式）"
+                >
+                  {data.config.statelessPerTurn ? '单轮全量：开' : '单轮全量：关'}
+                </button>
                 <button
                   className="btn btn-xs"
                   onClick={() => setEnableRegexBeautify((v) => !v)}
@@ -1243,6 +1280,26 @@ export function AppView() {
 
               <div className="card-box">
                 <strong>上下文与省额度策略（AGY 缓存优化）</strong>
+                <div className="row">
+                  <div>
+                    <div>无状态单轮模式（每轮全量重构上下文）</div>
+                    <div className="muted">
+                      开启后每次在侧边栏发送都将新开干净后台会话，按酒馆顺序全量重拼预设+开场白+历史楼层；编楼/重Roll即时生效，但左侧历史列表会按轮新增会话。
+                    </div>
+                  </div>
+                  <label className="st-switch" style={{ flexShrink: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(data.config.statelessPerTurn)}
+                      onChange={(e) =>
+                        callTool('tavern_app_update_config', {
+                          statelessPerTurn: e.target.checked,
+                        })
+                      }
+                    />
+                    <span className="st-slider" />
+                  </label>
+                </div>
                 <div className="row">
                   <span className="muted">预设后半段周期提醒（0 = 仅首轮钉死，最省额度）</span>
                   <input

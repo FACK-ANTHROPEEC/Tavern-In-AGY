@@ -758,6 +758,7 @@ server.registerTool(
       cooldownTurns: z.number().optional(),
       postHistoryRefreshInterval: z.number().optional(),
       enablePostHistoryInjection: z.boolean().optional(),
+      statelessPerTurn: z.boolean().optional(),
     },
     _meta: APP_ONLY_META,
   },

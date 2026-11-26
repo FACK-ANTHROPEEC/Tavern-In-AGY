@@ -122,7 +122,7 @@ async function main(): Promise<void> {
         pendingFork.turns,
         card.name,
         config.userName || 'User',
-        15,
+        30,
         activeRegexScripts,
       );
     } else {
@@ -132,7 +132,7 @@ async function main(): Promise<void> {
           existingTurns,
           card.name,
           config.userName || 'User',
-          15,
+          30,
           activeRegexScripts,
         );
       }
@@ -150,6 +150,9 @@ async function main(): Promise<void> {
     session.statData = startBundle.statData;
     session.sessionStartCardId = card.id;
     session.sessionStartPresetId = currentPresetId;
+    if (config.enablePostHistoryInjection) {
+      session.lastPostHistoryTurn = session.turnCount + 1;
+    }
     sessionStartPrefix = startBundle.systemMessage;
   }
 

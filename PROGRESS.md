@@ -2,9 +2,13 @@
 
 ## 1. 当前状态与里程碑
 - **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agent `tavern-rp`）打造的 SillyTavern 全通用兼容 Roleplay 引擎，零反代、零凭据抽取。
-- **当前阶段**：**v0.7.0** 全生态预设与正则渲染引擎已完成测试、构建与安装（Git 标签 `v0.1.0`～`v0.7.0`）。
-- **最近完成**：实现通用 ST 正则执行引擎（`src/core/regex-engine.ts`，完整支持 `minDepth`/`maxDepth`、`placement`、`markdownOnly`/`promptOnly`、`trimStrings`、`{{match}}`、`substituteRegex`）、三路楼层分流渲染器（`FloorRenderer.tsx`：暖墨纯文本 / 净化静态 `<details>` HTML / 沙箱 iframe 交互小部件）、ST 高频宏全集补齐（含 `{{roll 1d999999}}`、`{{pick}}`、`globalvar`/`incvar`/`decvar`、`lastUserMessage`/`lastCharMessage`）、深度排序 + Assistant Prefill 软桥接 + `postHistoryText` EJS 编译、分支续写历史压缩、以及侧边栏预设条目在线编辑与正则独立开关。
-- **验证状态**：`npm test` 7 套件 / 27 项测试全绿（含 `预设参考/` 下 4 份真实社区预设 `Kemini` / `Meowssiah` / `夏瑾` / `我即浪潮` 及 `卡片参考/` 下 2 张真卡集成回归）；`npm run build`（`dist/ui/index.html` `546.23 kB`）与 `npm run install:plugin` 通过。
+- **当前阶段**：**v0.7.1**（全生态预设与正则引擎 + 侧边栏单通道交付 + 无状态单轮全量重构模式）已完成测试、构建与安装（Git 标签 `v0.1.0`～`v0.7.1`）。
+- **最近完成**：
+  - 侧边栏单通道交付（`tavern_commit_turn` 承载全部正文与 CoT 标签，主聊天仅留 1 行楼层索引）与瘦身 delta 载荷；
+  - 严格对齐 ST 提示词顺序（静态设定 → `#0` 开场白 → 自动续接历史楼层 → MVU 状态 → `postHistoryText` 尾注），默认 `postHistoryRefreshInterval = 0`；
+  - 新增 **无状态单轮模式（`statelessPerTurn`）**：开启后侧边栏每轮发送通过 `target: 'new'` 拉起干净后台会话并全量重拼上下文（支持最多 30 楼与深度正则压缩），同步修复首轮重复注入 `postHistoryText`、空白欢迎页直聊提示与权限动态刷新；
+  - 零脚本原生 `<details><summary>` 折叠思维链/规划标签、2.5s 自动轮询同步新楼层、角色卡内嵌世界书完整展开与独立开关。
+- **验证状态**：`npm test` 7 套件 / 27 项测试全绿；`npm run build`（`dist/ui/index.html` `552.61 kB`）与 `npm run install:plugin` 通过。
 
 ## 2. 架构约束与关键契约
 - **目录与分层红线**：
@@ -18,8 +22,8 @@
   - Windows PowerShell 5.1 不支持 `&&`；`卡片参考/`、`预设参考/` 与 `我即浪潮-*.json` 已在 `.gitignore` 排除。
 
 ## 3. 下一步计划（按优先级）
-1. 在 Antigravity MCP Servers 中刷新重启 `tavern-in-agy` 后，重开右侧边栏实测导入 4 份真实预设与 2 张参考卡，验证正则美化开关、内联卡片交互与预设在线编辑。
-2. 按实机反馈继续微调 `TavernHelper` 垫片 API（如 `toastr` / `updateVariablesWith`）与预设导出能力。
+1. 在 Antigravity MCP Servers 中刷新重启 `tavern-in-agy` 后，实测「无状态单轮模式（单轮全量）」开关与多轮正文续写手感。
+2. 设计并实现 **正文摘要 / 剧情压缩模块**，在长篇 RP 中自动压缩早期楼层以保持上下文精简。
 
 ## 4. 核心文件索引
 - `docs/DESIGN.md` & `DEVELOPMENT.md`：架构设计与完整开发维护指南

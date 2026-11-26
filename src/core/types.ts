@@ -177,6 +177,8 @@ export interface TavernConfig {
   stateRefreshInterval: number;
   postHistoryRefreshInterval: number;
   enablePostHistoryInjection: boolean;
+  /** When true, every side-pane send spawns a fresh background conversation with full re-assembled context */
+  statelessPerTurn?: boolean;
 }
 
 export function createDefaultState(): LiveCharacterState {
@@ -206,5 +208,6 @@ export function createDefaultConfig(): TavernConfig {
     stateRefreshInterval: 3,
     postHistoryRefreshInterval: 0,
     enablePostHistoryInjection: true,
+    statelessPerTurn: false,
   };
 }

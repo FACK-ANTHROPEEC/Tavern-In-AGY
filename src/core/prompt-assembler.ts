@@ -155,7 +155,7 @@ export function assembleSessionStart(params: {
   }
 
   parts.push(
-    '[TavernInAGY Delivery] Put your full turn output (including any preset CoT/formatting tags and story prose) inside `tavern_commit_turn(narrative)`. Do not repeat story prose in main chat; end main chat with only a 1-line floor index (e.g., `✦ 第 #N 楼已落笔至侧边栏`).',
+    '[TavernInAGY Delivery] Stay 100% in Roleplay mode and do NOT invoke coding, file, shell, or browser tools. Put your full turn output (including any preset CoT/formatting tags and story prose) inside `tavern_commit_turn(narrative)`. Do not repeat story prose in main chat; end main chat with only a 1-line floor index (e.g., `✦ 第 #N 楼已落笔至侧边栏`).',
   );
 
   const systemMessage = parts.filter((p) => p.trim().length > 0).join('\n\n---\n\n');

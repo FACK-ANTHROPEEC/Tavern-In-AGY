@@ -63,25 +63,25 @@ async function main(): Promise<void> {
     if (pendingFork.statData) {
       session.statData = { ...pendingFork.statData };
     }
-    resumedStoryBlock = storyLog.formatForForkResume(
-      pendingFork.turns,
-      card.name,
-      config.userName || 'User',
-      15,
-      activeRegexScripts,
-    );
-  } else {
-    const existingTurns = storyLog.readTurns(card.id);
-    if (existingTurns.length > 0) {
       resumedStoryBlock = storyLog.formatForForkResume(
-        existingTurns,
+        pendingFork.turns,
         card.name,
         config.userName || 'User',
-        15,
+        30,
         activeRegexScripts,
       );
+    } else {
+      const existingTurns = storyLog.readTurns(card.id);
+      if (existingTurns.length > 0) {
+        resumedStoryBlock = storyLog.formatForForkResume(
+          existingTurns,
+          card.name,
+          config.userName || 'User',
+          30,
+          activeRegexScripts,
+        );
+      }
     }
-  }
 
   const bundle = assembleSessionStart({
     config,
@@ -96,6 +96,9 @@ async function main(): Promise<void> {
   session.statData = bundle.statData;
   session.sessionStartCardId = card.id;
   session.sessionStartPresetId = preset?.id ?? '';
+  if (config.enablePostHistoryInjection) {
+    session.lastPostHistoryTurn = session.turnCount + 1;
+  }
   storage.saveSession(session);
 
   if (!bundle.systemMessage.trim()) {
