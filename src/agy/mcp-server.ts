@@ -70,6 +70,15 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
   const storyKey = config.activeCardId || 'default';
   const storyTurns = storyLog.readTurns(storyKey);
 
+  const activeCardObj = config.activeCardId ? cards.find((c) => c.id === config.activeCardId) : undefined;
+  const activePresetObj = config.activePresetId ? presets.find((p) => p.id === config.activePresetId) : undefined;
+  const activeDisplayRegexScripts = opts?.omitAvatars
+    ? undefined
+    : [
+        ...(activePresetObj?.regexScripts ?? []),
+        ...(activeCardObj?.regexScripts ?? []),
+      ].filter((r) => !r.disabled && (r.markdownOnly || !r.promptOnly));
+
   return {
     config,
     cards: cards.map((c) => ({
@@ -103,8 +112,19 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
         isSectionHeader: item.isSectionHeader,
         charLength: item.content.length,
       })),
+      regexScripts: p.regexScripts.map((r, idx) => ({
+        index: idx,
+        scriptName: r.scriptName,
+        disabled: r.disabled,
+        placement: r.placement,
+        markdownOnly: Boolean(r.markdownOnly),
+        promptOnly: Boolean(r.promptOnly),
+        minDepth: r.minDepth ?? null,
+        maxDepth: r.maxDepth ?? null,
+      })),
       importedAt: p.importedAt,
     })),
+    activeDisplayRegexScripts,
     lorebooks: lorebooks.map((b) => ({
       id: b.id,
       name: b.name,
@@ -125,7 +145,7 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
 
 const server = new McpServer({
   name: 'tavern-in-agy',
-  version: '0.6.0',
+  version: '0.7.0',
 });
 
 // UI Resource (SEP-1865 MCP App) with dynamic image-host CSP resourceDomains
@@ -616,6 +636,86 @@ server.registerTool(
     }
     return {
       content: [{ type: 'text', text: 'updated' }],
+      structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'tavern_app_get_preset_prompt',
+  {
+    title: 'Get Preset Prompt Full Content',
+    description: 'Fetch the full content and metadata of a single prompt item inside a preset for inline editing.',
+    inputSchema: {
+      presetId: z.string(),
+      identifier: z.string(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ presetId, identifier }) => {
+    const preset = storage.getPreset(presetId);
+    if (!preset) throw new Error(`Preset not found: ${presetId}`);
+    const item = preset.prompts.find((p) => p.identifier === identifier);
+    if (!item) throw new Error(`Prompt item not found: ${identifier}`);
+    return {
+      content: [{ type: 'text', text: 'ok' }],
+      structuredContent: { presetId, item },
+    };
+  },
+);
+
+server.registerTool(
+  'tavern_app_edit_preset_prompt',
+  {
+    title: 'Edit Preset Prompt Content',
+    description: 'Update the content or role of a single prompt item inside a preset.',
+    inputSchema: {
+      presetId: z.string(),
+      identifier: z.string(),
+      content: z.string(),
+      role: z.enum(['system', 'user', 'assistant']).optional(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ presetId, identifier, content, role }) => {
+    const preset = storage.getPreset(presetId);
+    if (!preset) throw new Error(`Preset not found: ${presetId}`);
+    const target = preset.prompts.find((p) => p.identifier === identifier);
+    if (target) {
+      target.content = content;
+      target.isSectionHeader = !target.marker && content.trim().length === 0;
+      if (role) target.role = role;
+      storage.savePreset(preset);
+    }
+    return {
+      content: [{ type: 'text', text: 'prompt updated' }],
+      structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'tavern_app_toggle_preset_regex',
+  {
+    title: 'Toggle Preset Regex Script',
+    description: 'Enable or disable a regex script inside a preset.',
+    inputSchema: {
+      presetId: z.string(),
+      index: z.number(),
+      disabled: z.boolean(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ presetId, index, disabled }) => {
+    const preset = storage.getPreset(presetId);
+    if (!preset) throw new Error(`Preset not found: ${presetId}`);
+    const target = preset.regexScripts[index];
+    if (target) {
+      target.disabled = disabled;
+      storage.savePreset(preset);
+    }
+    return {
+      content: [{ type: 'text', text: 'regex toggled' }],
       structuredContent: buildBootstrapPayload(),
     };
   },

@@ -123,6 +123,9 @@ export function parseCharacterCardJson(
         trimStrings: Array.isArray(rs.trimStrings) ? rs.trimStrings.map(String) : undefined,
         markdownOnly: Boolean(rs.markdownOnly),
         promptOnly: Boolean(rs.promptOnly),
+        minDepth: typeof rs.minDepth === 'number' ? rs.minDepth : null,
+        maxDepth: typeof rs.maxDepth === 'number' ? rs.maxDepth : null,
+        substituteRegex: typeof rs.substituteRegex === 'number' ? rs.substituteRegex : 0,
       });
     }
   }

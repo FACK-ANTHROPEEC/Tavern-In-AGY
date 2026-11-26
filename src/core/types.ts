@@ -81,6 +81,10 @@ export interface RegexScript {
   trimStrings?: string[];
   markdownOnly?: boolean;
   promptOnly?: boolean;
+  minDepth?: number | null;
+  maxDepth?: number | null;
+  /** 0 = NONE, 1 = RAW, 2 = ESCAPED */
+  substituteRegex?: number;
 }
 
 export interface Preset {

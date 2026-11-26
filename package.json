@@ -1,6 +1,6 @@
 {
   "name": "tavern-in-agy",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "SillyTavern-compatible Roleplay engine built natively for Antigravity (MCP App + Local MCP Server + Lifecycle Hooks)",
   "type": "module",
   "scripts": {

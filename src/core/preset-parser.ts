@@ -43,12 +43,14 @@ export function parsePresetJson(
     }
   }
 
-  // Pick canonical prompt_order (character_id 100001 is ST's global default, otherwise last)
+  // Pick canonical prompt_order (character_id 100001 is ST's global default, otherwise non-empty last)
   const promptOrders = Array.isArray(obj.prompt_order)
     ? (obj.prompt_order as Array<Record<string, unknown>>)
     : [];
   const targetOrderObj =
-    promptOrders.find((po) => po.character_id === 100001) ?? promptOrders[promptOrders.length - 1];
+    promptOrders.find((po) => po.character_id === 100001 && Array.isArray(po.order) && po.order.length > 0) ??
+    [...promptOrders].reverse().find((po) => Array.isArray(po.order) && po.order.length > 0) ??
+    promptOrders[promptOrders.length - 1];
   const orderEntries = Array.isArray(targetOrderObj?.order)
     ? (targetOrderObj.order as Array<Record<string, unknown>>)
     : [];
@@ -67,7 +69,7 @@ export function parsePresetJson(
       name: String(p.name ?? p.identifier ?? 'Untitled'),
       role,
       content,
-      enabled: enabledOverride !== undefined ? enabledOverride : Boolean(p.enabled),
+      enabled: enabledOverride !== undefined ? enabledOverride : p.enabled !== false,
       marker,
       injectionPosition: typeof p.injection_position === 'number' ? p.injection_position : 0,
       injectionDepth: typeof p.injection_depth === 'number' ? p.injection_depth : 4,
@@ -92,7 +94,50 @@ export function parsePresetJson(
     ordered.push(toItem(p));
   }
 
-  // Extract extensions.regex_scripts if present
+  // Fallback for legacy / simplified presets without `prompts` array
+  if (ordered.length === 0) {
+    const legacyFields: Array<{ key: string; name: string; afterHistory?: boolean }> = [
+      { key: 'main_prompt', name: 'Main Prompt' },
+      { key: 'system_prompt', name: 'System Prompt' },
+      { key: 'nsfw_prompt', name: 'Auxiliary Prompt' },
+      { key: 'jailbreak_prompt', name: 'Post-History Instructions', afterHistory: true },
+    ];
+    let insertedHistoryMarker = false;
+    for (const lf of legacyFields) {
+      const val = obj[lf.key];
+      if (typeof val === 'string' && val.trim()) {
+        if (lf.afterHistory && !insertedHistoryMarker) {
+          ordered.push({
+            identifier: 'chatHistory',
+            name: 'Chat History',
+            role: 'system',
+            content: '',
+            enabled: true,
+            marker: true,
+            injectionPosition: 0,
+            injectionDepth: 4,
+            injectionOrder: 100,
+            isSectionHeader: false,
+          });
+          insertedHistoryMarker = true;
+        }
+        ordered.push({
+          identifier: lf.key,
+          name: lf.name,
+          role: 'system',
+          content: val,
+          enabled: true,
+          marker: false,
+          injectionPosition: 0,
+          injectionDepth: 4,
+          injectionOrder: 100,
+          isSectionHeader: false,
+        });
+      }
+    }
+  }
+
+  // Extract extensions.regex_scripts (including minDepth / maxDepth / substituteRegex)
   const regexScripts: RegexScript[] = [];
   const ext = obj.extensions as Record<string, unknown> | undefined;
   if (ext && Array.isArray(ext.regex_scripts)) {
@@ -107,6 +152,9 @@ export function parsePresetJson(
         trimStrings: Array.isArray(rs.trimStrings) ? rs.trimStrings.map(String) : undefined,
         markdownOnly: Boolean(rs.markdownOnly),
         promptOnly: Boolean(rs.promptOnly),
+        minDepth: typeof rs.minDepth === 'number' ? rs.minDepth : null,
+        maxDepth: typeof rs.maxDepth === 'number' ? rs.maxDepth : null,
+        substituteRegex: typeof rs.substituteRegex === 'number' ? rs.substituteRegex : 0,
       });
     }
   }
@@ -138,6 +186,11 @@ export interface PresetSlots {
   dialogueExamples?: string;
 }
 
+export interface CompilePresetOptions {
+  /** Optional EJS template renderer executed before macro evaluation on every prompt block */
+  ejsRender?: (raw: string) => string;
+}
+
 export interface CompiledPreset {
   staticText: string;
   postHistoryText: string;
@@ -146,27 +199,46 @@ export interface CompiledPreset {
     enabledCount: number;
     staticBlockCount: number;
     postHistoryBlockCount: number;
+    prefillCount: number;
     staticChars: number;
     postHistoryChars: number;
   };
 }
 
+interface PositionedBlock {
+  text: string;
+  depth: number;
+  order: number;
+  seq: number;
+}
+
 /**
  * Evaluates a parsed Preset in strict prompt_order sequence:
  * - Items before `chatHistory` (and injectionPosition === 0) compile into `staticText` (L1 SessionStart)
- * - Items after `chatHistory` (or injectionPosition === 1) compile into `postHistoryText` (L3 PreInvocation)
- * - `setvar` / `getvar` state flows seamlessly from top to bottom.
+ * - Items after `chatHistory` (or injectionPosition === 1) compile into `postHistoryText` (L3 PreInvocation),
+ *   ordered by `injectionDepth` desc (deeper first, depth 0 closest to end) and `injectionOrder` asc.
+ * - Enabled `role: "assistant"` items after `chatHistory` are bridged as structured continuation anchors.
+ * - `setvar` / `getvar` state and optional EJS rendering flow seamlessly from top to bottom.
  */
 export function compilePreset(
   preset: Preset,
   ctx: MacroContext,
   slots: PresetSlots = {},
+  options: CompilePresetOptions = {},
 ): CompiledPreset {
   const staticBlocks: string[] = [];
-  const postHistoryBlocks: string[] = [];
+  const depthBlocks: PositionedBlock[] = [];
+  const trailingPostBlocks: string[] = [];
 
   let afterChatHistory = false;
   let enabledCount = 0;
+  let prefillCount = 0;
+  let seq = 0;
+
+  const renderBlock = (raw: string): string => {
+    const afterEjs = options.ejsRender ? options.ejsRender(raw) : raw;
+    return evaluateMacros(afterEjs, ctx).trim();
+  };
 
   for (const item of preset.prompts) {
     if (!item.enabled) continue;
@@ -180,10 +252,10 @@ export function compilePreset(
 
       const slotValue = resolveSlot(item.identifier, slots);
       if (slotValue && slotValue.trim().length > 0) {
-        const renderedSlot = evaluateMacros(slotValue, ctx).trim();
+        const renderedSlot = renderBlock(slotValue);
         if (renderedSlot) {
           if (afterChatHistory) {
-            postHistoryBlocks.push(renderedSlot);
+            trailingPostBlocks.push(renderedSlot);
           } else {
             staticBlocks.push(renderedSlot);
           }
@@ -196,16 +268,36 @@ export function compilePreset(
       continue;
     }
 
-    const rendered = evaluateMacros(item.content, ctx).trim();
+    const rendered = renderBlock(item.content);
     if (!rendered) continue;
 
-    if (afterChatHistory || item.injectionPosition === 1) {
-      postHistoryBlocks.push(rendered);
+    if (item.injectionPosition === 1) {
+      depthBlocks.push({
+        text: formatRoleTaggedBlock(item.role, rendered, false),
+        depth: item.injectionDepth,
+        order: item.injectionOrder,
+        seq: seq++,
+      });
+    } else if (afterChatHistory) {
+      if (item.role === 'assistant') {
+        prefillCount += 1;
+        trailingPostBlocks.push(formatRoleTaggedBlock('assistant', rendered, true));
+      } else {
+        trailingPostBlocks.push(formatRoleTaggedBlock(item.role, rendered, false));
+      }
     } else {
       staticBlocks.push(rendered);
     }
   }
 
+  // Order depth-injected blocks: deeper depth first (e.g. depth 4 before depth 0), then injectionOrder asc
+  depthBlocks.sort((a, b) => {
+    if (b.depth !== a.depth) return b.depth - a.depth;
+    if (a.order !== b.order) return a.order - b.order;
+    return a.seq - b.seq;
+  });
+
+  const postHistoryBlocks = [...depthBlocks.map((b) => b.text), ...trailingPostBlocks];
   const staticText = staticBlocks.join('\n\n');
   const postHistoryText = postHistoryBlocks.join('\n\n');
 
@@ -217,10 +309,22 @@ export function compilePreset(
       enabledCount,
       staticBlockCount: staticBlocks.length,
       postHistoryBlockCount: postHistoryBlocks.length,
+      prefillCount,
       staticChars: staticText.length,
       postHistoryChars: postHistoryText.length,
     },
   };
+}
+
+function formatRoleTaggedBlock(
+  role: 'system' | 'user' | 'assistant',
+  rendered: string,
+  isAfterHistoryPrefill: boolean,
+): string {
+  if (isAfterHistoryPrefill && role === 'assistant') {
+    return `[Assistant Continuation Anchor]\nAcknowledge and continue seamlessly from this stance/opening:\n${rendered}`;
+  }
+  return rendered;
 }
 
 function resolveSlot(identifier: string, slots: PresetSlots): string | undefined {

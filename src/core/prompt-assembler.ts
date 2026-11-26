@@ -76,16 +76,16 @@ export function assembleSessionStart(params: {
     statData,
   };
 
-  const renderText = (raw: string): string => {
-    const afterEjs = renderEjsTemplate(raw, {
+  const ejsRender = (raw: string): string =>
+    renderEjsTemplate(raw, {
       statData,
       vars: ctx.vars,
       card,
       lorebooks: allBooks,
       userName,
     });
-    return evaluateMacros(afterEjs, ctx);
-  };
+
+  const renderText = (raw: string): string => evaluateMacros(ejsRender(raw), ctx);
 
   const scan = scanLorebooks(allBooks, {
     recentMessages: [],
@@ -110,9 +110,9 @@ export function assembleSessionStart(params: {
   const parts: string[] = [];
 
   if (preset) {
-    const compiled = compilePreset(preset, ctx, slots);
+    const compiled = compilePreset(preset, ctx, slots, { ejsRender });
     if (compiled.staticText) {
-      parts.push(renderText(compiled.staticText));
+      parts.push(compiled.staticText);
     }
     Object.assign(ctx.vars, compiled.variables);
   } else {
@@ -178,6 +178,9 @@ export function assemblePreInvocation(params: {
   const statData = { ...(session.statData ?? {}) };
   const userName = config.userName || 'User';
 
+  const lastUserMessage = recentMessages[recentMessages.length - 1] ?? '';
+  const lastCharMessage = recentMessages.length >= 2 ? recentMessages[recentMessages.length - 2] ?? '' : '';
+
   const ctx: MacroContext = {
     char: card.name,
     user: userName,
@@ -185,18 +188,23 @@ export function assemblePreInvocation(params: {
     scenario: card.scenario,
     vars: { ...session.variables },
     statData,
+    lastUserMessage,
+    lastCharMessage,
+    lastMessage: lastUserMessage || lastCharMessage,
+    lastMessageId: nextTurn,
+    original: card.postHistoryInstructions,
   };
 
-  const renderText = (raw: string): string => {
-    const afterEjs = renderEjsTemplate(raw, {
+  const ejsRender = (raw: string): string =>
+    renderEjsTemplate(raw, {
       statData,
       vars: ctx.vars,
       card,
       lorebooks: allBooks,
       userName,
     });
-    return evaluateMacros(afterEjs, ctx);
-  };
+
+  const renderText = (raw: string): string => evaluateMacros(ejsRender(raw), ctx);
 
   const parts: string[] = [];
 
@@ -224,14 +232,14 @@ export function assemblePreInvocation(params: {
 
   if (shouldRefreshPostHistory) {
     if (preset) {
-      const compiled = compilePreset(preset, ctx, {});
+      const compiled = compilePreset(preset, ctx, {}, { ejsRender });
       Object.assign(ctx.vars, compiled.variables);
       if (compiled.postHistoryText.trim()) {
         parts.push(compiled.postHistoryText.trim());
         injectedPostHistory = true;
       }
     } else if (card.postHistoryInstructions.trim()) {
-      parts.push(evaluateMacros(card.postHistoryInstructions, ctx).trim());
+      parts.push(renderText(card.postHistoryInstructions).trim());
       injectedPostHistory = true;
     }
   }

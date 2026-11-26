@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { App } from '@modelcontextprotocol/ext-apps';
+import type { RegexScript } from '../core/types';
 import { MvuTreeView } from './MvuTreeView';
 import { TavernFrontendHost, type CardFrontendPayload } from './TavernFrontendHost';
+import { FloorRenderer } from './FloorRenderer';
 
 interface CardSummary {
   id: string;
@@ -28,12 +30,24 @@ interface PresetPromptSummary {
   charLength: number;
 }
 
+interface PresetRegexSummary {
+  index: number;
+  scriptName: string;
+  disabled: boolean;
+  placement: number[];
+  markdownOnly: boolean;
+  promptOnly: boolean;
+  minDepth: number | null;
+  maxDepth: number | null;
+}
+
 interface PresetSummary {
   id: string;
   name: string;
   regexCount: number;
   samplingMeta: Record<string, unknown>;
   prompts: PresetPromptSummary[];
+  regexScripts?: PresetRegexSummary[];
 }
 
 interface LorebookSummary {
@@ -97,6 +111,7 @@ interface BootstrapData {
   statData?: Record<string, unknown>;
   latestOptions: WaveOption[];
   storyTurns: StoryTurnItem[];
+  activeDisplayRegexScripts?: RegexScript[];
   dataDir: string;
 }
 
@@ -110,33 +125,6 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
   return btoa(binary);
-}
-
-function renderStoryNarrative(narrative: string) {
-  const paragraphs = narrative
-    .split(/\n+/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-
-  return (
-    <div className="story-prose">
-      {paragraphs.map((p, i) => {
-        const isDialogue =
-          (p.startsWith('「') && p.endsWith('」')) ||
-          (p.startsWith('『') && p.endsWith('』')) ||
-          (p.startsWith('“') && p.endsWith('”')) ||
-          p.startsWith('>');
-        if (isDialogue) {
-          return (
-            <blockquote key={i} className="story-quote">
-              {p.replace(/^>\s*/, '')}
-            </blockquote>
-          );
-        }
-        return <p key={i}>{p}</p>;
-      })}
-    </div>
-  );
 }
 
 export function AppView() {
@@ -154,9 +142,14 @@ export function AppView() {
   const [pendingSend, setPendingSend] = useState<string | null>(null);
   const [showOptions, setShowOptions] = useState<boolean>(true);
   const [cardFrontend, setCardFrontend] = useState<CardFrontendPayload | null>(null);
+  const [enableRegexBeautify, setEnableRegexBeautify] = useState<boolean>(true);
+  const [showPresetRegexList, setShowPresetRegexList] = useState<boolean>(false);
+  const [editingPromptId, setEditingPromptId] = useState<string | null>(null);
+  const [editingPromptContent, setEditingPromptContent] = useState<string>('');
+  const [editingPromptRole, setEditingPromptRole] = useState<'system' | 'user' | 'assistant'>('system');
 
   useEffect(() => {
-    const app = new App({ name: 'TavernInAGY', version: '0.5.0' }, {});
+    const app = new App({ name: 'TavernInAGY', version: '0.7.0' }, {});
     appRef.current = app;
 
     app.ontoolresult = (result) => {
@@ -164,6 +157,7 @@ export function AppView() {
       if (sc && sc.config) {
         setData((prev) => ({
           ...sc,
+          activeDisplayRegexScripts: sc.activeDisplayRegexScripts ?? prev?.activeDisplayRegexScripts,
           cards: sc.cards.map((c) => {
             const old = prev?.cards.find((x) => x.id === c.id);
             return { ...c, avatarDataUrl: c.avatarDataUrl ?? old?.avatarDataUrl };
@@ -446,16 +440,24 @@ export function AppView() {
                   <span className="muted">开场白 · {activeCard.name}</span>
                   <span className="badge">Opening</span>
                 </div>
-                {renderStoryNarrative(
-                  activeCard.firstMessage
+                <FloorRenderer
+                  narrative={activeCard.firstMessage
                     .replace(/\{\{char\}\}/gi, activeCard.name)
-                    .replace(/\{\{user\}\}/gi, data.config.userName || 'User'),
-                )}
+                    .replace(/\{\{user\}\}/gi, data.config.userName || 'User')}
+                  depth={0}
+                  regexScripts={data.activeDisplayRegexScripts ?? []}
+                  enableRegex={enableRegexBeautify}
+                  charName={activeCard.name}
+                  userName={data.config.userName || 'User'}
+                  statData={data.statData ?? {}}
+                  onSendMessage={sendTextToChat}
+                />
               </div>
             )}
 
-            {(data.storyTurns ?? []).map((t) => {
+            {(data.storyTurns ?? []).map((t, idx, arr) => {
               const isEditing = editingTurnId === t.turnId;
+              const depth = arr.length - 1 - idx;
               return (
                 <React.Fragment key={t.turnId}>
                   {t.userMessage && (
@@ -530,7 +532,16 @@ export function AppView() {
                         onChange={(e) => setEditingDraft(e.target.value)}
                       />
                     ) : (
-                      renderStoryNarrative(t.narrative)
+                      <FloorRenderer
+                        narrative={t.narrative}
+                        depth={depth}
+                        regexScripts={data.activeDisplayRegexScripts ?? []}
+                        enableRegex={enableRegexBeautify}
+                        charName={activeCard?.name ?? '角色'}
+                        userName={data.config.userName || 'User'}
+                        statData={data.statData ?? {}}
+                        onSendMessage={sendTextToChat}
+                      />
                     )}
                   </div>
                 </React.Fragment>
@@ -613,13 +624,22 @@ export function AppView() {
               <span className="muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {statusMsg}
               </span>
-              <button
-                className="btn btn-xs"
-                onClick={handleForkBranch}
-                title="编辑或删楼后，拉起新分支无缝续写"
-              >
-                ✨ 分支续写
-              </button>
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <button
+                  className="btn btn-xs"
+                  onClick={() => setEnableRegexBeautify((v) => !v)}
+                  title="切换预设/角色卡正则美化与原始正文"
+                >
+                  {enableRegexBeautify ? '正则美化：开' : '正则美化：关'}
+                </button>
+                <button
+                  className="btn btn-xs"
+                  onClick={handleForkBranch}
+                  title="编辑或删楼后，拉起新分支无缝续写"
+                >
+                  ✨ 分支续写
+                </button>
+              </div>
             </div>
           </div>
         </>
@@ -722,7 +742,71 @@ export function AppView() {
 
               {activePreset && (
                 <>
-                  <div className="muted">采样参数由 AGY 宿主托管；下方可按分组一键开关任意社区模块。</div>
+                  <div className="muted">采样参数由 AGY 宿主托管；点击任意条目名称可展开在线编辑正文，下方亦可独立开关正则。</div>
+
+                  {activePreset.regexScripts && activePreset.regexScripts.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div
+                        className="section-header"
+                        onClick={() => setShowPresetRegexList((v) => !v)}
+                      >
+                        <span>
+                          {showPresetRegexList ? '▾' : '▸'} 预设正则脚本（Regex）
+                        </span>
+                        <span className="muted">
+                          {activePreset.regexScripts.filter((r) => !r.disabled).length}/{activePreset.regexScripts.length}
+                        </span>
+                      </div>
+                      {showPresetRegexList && (
+                        <div className="st-prompt-list">
+                          {activePreset.regexScripts.map((r) => {
+                            const modeTag =
+                              r.markdownOnly && !r.promptOnly
+                                ? '仅显示'
+                                : r.promptOnly && !r.markdownOnly
+                                  ? '仅注入'
+                                  : '双向';
+                            const depthTag =
+                              r.minDepth !== null || r.maxDepth !== null
+                                ? `深度 ${r.minDepth ?? 0}~${r.maxDepth ?? '∞'}`
+                                : '';
+                            return (
+                              <div
+                                key={r.index}
+                                className={`st-prompt-row ${r.disabled ? 'disabled' : ''}`}
+                              >
+                                <div className="st-prompt-left">
+                                  <span className="st-star">⌘</span>
+                                  <span className="st-prompt-name" title={r.scriptName}>
+                                    {r.scriptName}
+                                  </span>
+                                  <span className="badge">{modeTag}</span>
+                                  {depthTag && <span className="badge">{depthTag}</span>}
+                                </div>
+                                <div className="st-prompt-right">
+                                  <label className="st-switch">
+                                    <input
+                                      type="checkbox"
+                                      checked={!r.disabled}
+                                      onChange={(e) =>
+                                        callTool('tavern_app_toggle_preset_regex', {
+                                          presetId: activePreset.id,
+                                          index: r.index,
+                                          disabled: !e.target.checked,
+                                        })
+                                      }
+                                    />
+                                    <span className="st-slider" />
+                                  </label>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <input
                     className="input"
                     placeholder="搜索预设条目名称或 ID..."
@@ -752,35 +836,113 @@ export function AppView() {
                             {sec.items.map((item) => {
                               const estTokens =
                                 item.charLength > 0 ? Math.max(1, Math.round(item.charLength / 2.5)) : 0;
+                              const isEditingPrompt = editingPromptId === item.identifier;
                               return (
-                                <div
-                                  key={item.identifier}
-                                  className={`st-prompt-row ${item.enabled ? '' : 'disabled'}`}
-                                >
-                                  <div className="st-prompt-left">
-                                    <span className="st-star">{item.marker ? '▤' : '✳'}</span>
-                                    <span className="st-prompt-name" title={item.identifier}>
-                                      {item.name}
-                                    </span>
-                                    {item.marker ? <span className="badge">插槽</span> : null}
-                                  </div>
-                                  <div className="st-prompt-right">
-                                    <label className="st-switch">
-                                      <input
-                                        type="checkbox"
-                                        checked={item.enabled}
-                                        onChange={(e) =>
-                                          callTool('tavern_app_toggle_preset_prompt', {
+                                <div key={item.identifier}>
+                                  <div className={`st-prompt-row ${item.enabled ? '' : 'disabled'}`}>
+                                    <div
+                                      className="st-prompt-left"
+                                      style={{ cursor: item.marker ? 'default' : 'pointer' }}
+                                      onClick={async () => {
+                                        if (item.marker) return;
+                                        if (isEditingPrompt) {
+                                          setEditingPromptId(null);
+                                          return;
+                                        }
+                                        const app = appRef.current;
+                                        if (!app) return;
+                                        const res = await app.callServerTool({
+                                          name: 'tavern_app_get_preset_prompt',
+                                          arguments: {
                                             presetId: activePreset.id,
                                             identifier: item.identifier,
-                                            enabled: e.target.checked,
-                                          })
+                                          },
+                                        });
+                                        const sc = res?.structuredContent as
+                                          | { item?: { content: string; role: 'system' | 'user' | 'assistant' } }
+                                          | undefined;
+                                        if (sc?.item) {
+                                          setEditingPromptId(item.identifier);
+                                          setEditingPromptContent(sc.item.content);
+                                          setEditingPromptRole(sc.item.role);
                                         }
-                                      />
-                                      <span className="st-slider" />
-                                    </label>
-                                    <span className="st-token-num">{estTokens > 0 ? estTokens : '-'}</span>
+                                      }}
+                                    >
+                                      <span className="st-star">{item.marker ? '▤' : '✳'}</span>
+                                      <span className="st-prompt-name" title={item.identifier}>
+                                        {item.name}
+                                      </span>
+                                      {item.marker ? <span className="badge">插槽</span> : null}
+                                      {item.role !== 'system' ? <span className="badge">{item.role}</span> : null}
+                                    </div>
+                                    <div className="st-prompt-right">
+                                      <label className="st-switch">
+                                        <input
+                                          type="checkbox"
+                                          checked={item.enabled}
+                                          onChange={(e) =>
+                                            callTool('tavern_app_toggle_preset_prompt', {
+                                              presetId: activePreset.id,
+                                              identifier: item.identifier,
+                                              enabled: e.target.checked,
+                                            })
+                                          }
+                                        />
+                                        <span className="st-slider" />
+                                      </label>
+                                      <span className="st-token-num">{estTokens > 0 ? estTokens : '-'}</span>
+                                    </div>
                                   </div>
+                                  {isEditingPrompt && (
+                                    <div className="prompt-inline-editor">
+                                      <div className="row">
+                                        <span className="muted">角色（Role）</span>
+                                        <select
+                                          className="input"
+                                          style={{ width: 120 }}
+                                          value={editingPromptRole}
+                                          onChange={(e) =>
+                                            setEditingPromptRole(
+                                              e.target.value as 'system' | 'user' | 'assistant',
+                                            )
+                                          }
+                                        >
+                                          <option value="system">system</option>
+                                          <option value="user">user</option>
+                                          <option value="assistant">assistant</option>
+                                        </select>
+                                      </div>
+                                      <textarea
+                                        className="textarea"
+                                        style={{ minHeight: 120 }}
+                                        value={editingPromptContent}
+                                        onChange={(e) => setEditingPromptContent(e.target.value)}
+                                      />
+                                      <div className="row" style={{ justifyContent: 'flex-end' }}>
+                                        <button
+                                          className="btn btn-xs"
+                                          onClick={() => setEditingPromptId(null)}
+                                        >
+                                          取消
+                                        </button>
+                                        <button
+                                          className="btn btn-xs btn-primary"
+                                          onClick={async () => {
+                                            await callTool('tavern_app_edit_preset_prompt', {
+                                              presetId: activePreset.id,
+                                              identifier: item.identifier,
+                                              content: editingPromptContent,
+                                              role: editingPromptRole,
+                                            });
+                                            setEditingPromptId(null);
+                                            setStatusMsg(`已保存预设条目「${item.name}」`);
+                                          }}
+                                        >
+                                          保存条目
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               );
                             })}

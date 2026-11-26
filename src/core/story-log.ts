@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { StoryTurn } from './types.js';
+import type { RegexScript, StoryTurn } from './types.js';
+import { applyRegexScripts } from './regex-engine.js';
 
 function safeKey(key: string): string {
   return key.replace(/[^a-zA-Z0-9_\-\u4e00-\u9fa5]/g, '_');
@@ -76,18 +77,42 @@ export class StoryLogStore {
     return reindexed;
   }
 
-  formatForForkResume(turns: StoryTurn[], charName: string, userName: string, maxTurns = 10): string {
+  formatForForkResume(
+    turns: StoryTurn[],
+    charName: string,
+    userName: string,
+    maxTurns = 15,
+    regexScripts: RegexScript[] = [],
+  ): string {
     const recent = turns.slice(-maxTurns);
     if (recent.length === 0) return '';
     const lines: string[] = [
       `[Resumed Story Branch · Last ${recent.length} Turns]`,
       'Continue seamlessly from the exact edited/rolled-back story state below:',
     ];
-    for (const t of recent) {
+    for (let i = 0; i < recent.length; i++) {
+      const t = recent[i];
+      const depth = recent.length - 1 - i;
       if (t.userMessage) {
-        lines.push(`\n### Turn ${t.index} (${userName})\n${t.userMessage}`);
+        const userText =
+          regexScripts.length > 0
+            ? applyRegexScripts(t.userMessage, regexScripts, {
+                placement: 1,
+                target: 'prompt',
+                depth,
+              })
+            : t.userMessage;
+        lines.push(`\n### Turn ${t.index} (${userName})\n${userText}`);
       }
-      lines.push(`\n### Turn ${t.index} (${charName})\n${t.narrative}`);
+      const aiText =
+        regexScripts.length > 0
+          ? applyRegexScripts(t.narrative, regexScripts, {
+              placement: 2,
+              target: 'prompt',
+              depth,
+            })
+          : t.narrative;
+      lines.push(`\n### Turn ${t.index} (${charName})\n${aiText}`);
     }
     return lines.join('\n');
   }

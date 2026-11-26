@@ -51,10 +51,16 @@ async function main(): Promise<void> {
       session.statData = { ...pendingFork.statData };
     }
     const storyLog = new StoryLogStore(storage.rootDir);
+    const activeRegexScripts = [
+      ...(preset?.regexScripts ?? []),
+      ...(card.regexScripts ?? []),
+    ];
     resumedStoryBlock = storyLog.formatForForkResume(
       pendingFork.turns,
       card.name,
       config.userName || 'User',
+      15,
+      activeRegexScripts,
     );
   }
 
