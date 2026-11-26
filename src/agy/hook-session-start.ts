@@ -43,17 +43,39 @@ async function main(): Promise<void> {
   const session = storage.getSession(convId);
   // Sync latest live state & MVU statData written by MCP server ('default' shared store)
   let pendingDirectorInput = '';
+  const shared = storage.getSession('default');
   if (convId !== 'default') {
-    const shared = storage.getSession('default');
     session.state = { ...session.state, ...shared.state };
     if (shared.statData && Object.keys(shared.statData).length > 0) {
       session.statData = { ...shared.statData };
     }
-    if (shared.pendingDirectorInput) {
-      pendingDirectorInput = shared.pendingDirectorInput;
-      shared.pendingDirectorInput = undefined;
-      storage.saveSession(shared);
+  }
+
+  // In Director Mode, the main window (tavern-director) opens BEFORE any user message is sent,
+  // so pendingDirectorInput is absent -> return {} (0 bytes) to keep the director's mind 100% clean.
+  // Only the freshly spawned tavern-rp subagent (within 60s of PreInvocation) consumes it and receives the full RP context.
+  const hasFreshDirectorInput =
+    Boolean(shared.pendingDirectorInput) &&
+    Date.now() - (shared.pendingDirectorInputAt ?? 0) <= 60_000;
+
+  if (config.directorMode) {
+    if (!hasFreshDirectorInput) {
+      if (shared.pendingDirectorInput) {
+        shared.pendingDirectorInput = undefined;
+        shared.pendingDirectorInputAt = undefined;
+        storage.saveSession(shared);
+      }
+      process.stdout.write(JSON.stringify({}));
+      return;
     }
+    pendingDirectorInput = shared.pendingDirectorInput!;
+    shared.pendingDirectorInput = undefined;
+    shared.pendingDirectorInputAt = undefined;
+    storage.saveSession(shared);
+  } else if (shared.pendingDirectorInput) {
+    shared.pendingDirectorInput = undefined;
+    shared.pendingDirectorInputAt = undefined;
+    storage.saveSession(shared);
   }
 
   // Always auto-resume existing story turns for the active card (or pending fork if staged)

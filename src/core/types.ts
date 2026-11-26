@@ -155,6 +155,7 @@ export interface SessionRuntime {
   latestOptions: Array<{ label: string; category: string; text: string }>;
   /** Latest user input cached by PreInvocation in directorMode for the spawned subagent's SessionStart lorebook scan */
   pendingDirectorInput?: string;
+  pendingDirectorInputAt?: number;
 }
 
 export interface SessionSnapshot {

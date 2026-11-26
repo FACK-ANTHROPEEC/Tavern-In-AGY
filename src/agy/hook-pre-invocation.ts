@@ -48,17 +48,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Director Mode: main window acts as a lightweight dispatcher (tavern-director) and spawns a fresh
-  // tavern-rp subagent per turn. Skip heavy injection into the main window, and cache the user input
-  // so the spawned subagent's SessionStart can scan triggered lorebooks cleanly.
-  if (config.directorMode) {
-    const shared = storage.getSession('default');
-    shared.pendingDirectorInput = lastUserInput;
-    storage.saveSession(shared);
-    process.stdout.write(JSON.stringify({}));
-    return;
-  }
-
   const card = storage.getCard(config.activeCardId);
   if (!card) {
     process.stdout.write(JSON.stringify({}));
@@ -85,6 +74,31 @@ async function main(): Promise<void> {
     (payload.invocationNum === undefined || payload.invocationNum > 1)
   ) {
     process.stdout.write(JSON.stringify({}));
+    return;
+  }
+
+  // Director Mode: main window acts as a lightweight dispatcher (tavern-director) and spawns a fresh
+  // tavern-rp subagent per turn. Never inject RP prose/lore into the main window; cache the user input
+  // with a 60s TTL so the spawned tavern-rp subagent's SessionStart unlocks and injects full context.
+  if (config.directorMode) {
+    const shared = storage.getSession('default');
+    shared.pendingDirectorInput = lastUserInput;
+    shared.pendingDirectorInputAt = Date.now();
+    storage.saveSession(shared);
+    session.lastUserInputHash = inputHash;
+    storage.saveSession(session);
+    process.stdout.write(
+      JSON.stringify({
+        injectSteps: [
+          {
+            systemMessage: {
+              systemMessage:
+                '[TavernInAGY Director] You are the dispatcher ONLY. Do NOT write story prose or call tavern_search_lorebook/tavern_commit_turn. Immediately call invoke_subagent(TypeName="tavern-rp", Role="RP Turn Writer") with the user message, wait for completion, then kill the subagent and reply with only the 1-line floor index.',
+            },
+          },
+        ],
+      }),
+    );
     return;
   }
 
