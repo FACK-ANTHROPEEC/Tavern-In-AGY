@@ -1,0 +1,19 @@
+# Dependencies & Build
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local runtime data & user private presets/cards
+data/
+.tavern-data/
+我即浪潮-*.json
+*.chara.png
+*.local.json
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
