@@ -20,6 +20,7 @@ export function formatCompactState(state: LiveCharacterState, charName: string):
   if (state.timeOfDay) lines.push(`- Time: ${state.timeOfDay}`);
   if (state.location) lines.push(`- Location: ${state.location}`);
   if (state.mood) lines.push(`- Mood: ${state.mood}`);
+  if (state.outfit) lines.push(`- Outfit: ${state.outfit}`);
   if (state.affection !== 0) lines.push(`- Affection: ${state.affection}`);
   if (state.inventory.length > 0) lines.push(`- Inventory: ${state.inventory.join(', ')}`);
   if (state.activeGoals.length > 0) lines.push(`- Active Goals: ${state.activeGoals.join('; ')}`);
@@ -45,8 +46,9 @@ export function assembleSessionStart(params: {
   preset: Preset | null;
   lorebooks: Lorebook[];
   session: SessionRuntime;
+  resumedStoryBlock?: string;
 }): SessionStartBundle {
-  const { config, card, preset, lorebooks, session } = params;
+  const { config, card, preset, lorebooks, session, resumedStoryBlock } = params;
   const allBooks = card.embeddedLorebook ? [card.embeddedLorebook, ...lorebooks] : lorebooks;
 
   const ctx: MacroContext = {
@@ -104,6 +106,10 @@ export function assembleSessionStart(params: {
   const compactState = formatCompactState(session.state, card.name);
   if (compactState) {
     parts.push(compactState);
+  }
+
+  if (resumedStoryBlock && resumedStoryBlock.trim()) {
+    parts.push(resumedStoryBlock.trim());
   }
 
   const systemMessage = parts.filter((p) => p.trim().length > 0).join('\n\n---\n\n');

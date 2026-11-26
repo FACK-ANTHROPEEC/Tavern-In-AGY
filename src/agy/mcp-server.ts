@@ -8,6 +8,8 @@ import { TavernStorage } from '../core/storage.js';
 import { parseCharacterCardJson, parseCharacterCardPng } from '../core/card-parser.js';
 import { parsePresetJson } from '../core/preset-parser.js';
 import { parseLorebookJson, scanLorebooks } from '../core/lorebook-engine.js';
+import { StoryLogStore } from '../core/story-log.js';
+import { exportCardToCustomAgent } from '../core/agent-exporter.js';
 import type { Lorebook } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -17,6 +19,7 @@ const APP_URI = 'ui://tavern/app.html';
 const DEFAULT_SESSION_ID = 'default';
 
 const storage = new TavernStorage();
+const storyLog = new StoryLogStore(storage.rootDir);
 
 function loadAppHtml(): string {
   const envPath = process.env.TAVERN_APP_HTML;
@@ -34,13 +37,15 @@ function loadAppHtml(): string {
   return '<!doctype html><html><body><h2>TavernInAGY UI not built yet</h2><p>Run <code>npm run build:ui</code>.</p></body></html>';
 }
 
-function buildBootstrapPayload() {
+function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
   const config = storage.getConfig();
   const cards = storage.listCards();
   const presets = storage.listPresets();
   const lorebooks = storage.listLorebooks();
   const snapshots = storage.listSnapshots();
   const session = storage.getSession(DEFAULT_SESSION_ID);
+  const storyKey = config.activeCardId || 'default';
+  const storyTurns = storyLog.readTurns(storyKey);
 
   return {
     config,
@@ -52,7 +57,7 @@ function buildBootstrapPayload() {
       scenario: c.scenario,
       firstMessage: c.firstMessage,
       tags: c.tags,
-      avatarDataUrl: c.avatarDataUrl,
+      avatarDataUrl: opts?.omitAvatars ? undefined : c.avatarDataUrl,
       hasEmbeddedLorebook: Boolean(c.embeddedLorebook),
       embeddedLorebookCount: c.embeddedLorebook?.entries.length ?? 0,
       importedAt: c.importedAt,
@@ -85,13 +90,14 @@ function buildBootstrapPayload() {
     snapshots,
     sessionState: session.state,
     latestOptions: session.latestOptions,
+    storyTurns: storyTurns.slice(-50),
     dataDir: storage.rootDir,
   };
 }
 
 const server = new McpServer({
   name: 'tavern-in-agy',
-  version: '0.1.0',
+  version: '0.4.0',
 });
 
 // UI Resource (SEP-1865 MCP App)
@@ -132,7 +138,8 @@ server.registerTool(
     },
   },
   async () => {
-    const payload = buildBootstrapPayload();
+    // Keep trajectory step payload under 1 MiB; App.tsx fetches full avatars via app-only bootstrap
+    const payload = buildBootstrapPayload({ omitAvatars: true });
     const activeCard = payload.cards.find((c) => c.id === payload.config.activeCardId);
     const activePreset = payload.presets.find((p) => p.id === payload.config.activePresetId);
     return {
@@ -150,10 +157,103 @@ server.registerTool(
 // --- Model-Visible RP Engine Tools ---
 
 server.registerTool(
+  'tavern_commit_turn',
+  {
+    title: 'Commit RP Turn & Refresh MVU Panel',
+    description:
+      'Persist the current Roleplay narrative turn to the local JSONL story log, update live character stats (location, timeOfDay, mood, outfit, affection, inventory, goals, summary), and live-refresh the TavernInAGY side-pane MVU panel.',
+    inputSchema: {
+      conversationId: z.string().optional(),
+      userMessage: z.string().optional(),
+      narrative: z.string(),
+      thought: z.string().optional(),
+      location: z.string().optional(),
+      timeOfDay: z.string().optional(),
+      mood: z.string().optional(),
+      outfit: z.string().optional(),
+      affection: z.number().optional(),
+      affectionDelta: z.number().optional(),
+      inventory: z.array(z.string()).optional(),
+      activeGoals: z.array(z.string()).optional(),
+      summary: z.string().optional(),
+      customFields: z.record(z.string()).optional(),
+      options: z
+        .array(
+          z.object({
+            label: z.string(),
+            category: z.string().optional(),
+            text: z.string(),
+          }),
+        )
+        .optional(),
+    },
+    _meta: {
+      ui: { resourceUri: APP_URI },
+    },
+  },
+  async (args) => {
+    const config = storage.getConfig();
+    const session = storage.getSession(args.conversationId || DEFAULT_SESSION_ID);
+    const st = session.state;
+
+    if (args.location !== undefined) st.location = args.location;
+    if (args.timeOfDay !== undefined) st.timeOfDay = args.timeOfDay;
+    if (args.mood !== undefined) st.mood = args.mood;
+    if (args.outfit !== undefined) st.outfit = args.outfit;
+    if (args.affection !== undefined) st.affection = args.affection;
+    if (args.affectionDelta !== undefined) st.affection += args.affectionDelta;
+    if (args.inventory !== undefined) st.inventory = args.inventory;
+    if (args.activeGoals !== undefined) st.activeGoals = args.activeGoals;
+    if (args.summary !== undefined) st.summary = args.summary;
+    if (args.customFields !== undefined) {
+      st.customFields = { ...st.customFields, ...args.customFields };
+    }
+    st.updatedAt = new Date().toISOString();
+
+    const normalizedOptions = (args.options ?? []).map((o) => ({
+      label: o.label,
+      category: o.category ?? o.label,
+      text: o.text,
+    }));
+    if (normalizedOptions.length > 0) {
+      session.latestOptions = normalizedOptions;
+    }
+    storage.saveSession(session);
+
+    const storyKey = config.activeCardId || 'default';
+    const turn = storyLog.appendTurn(storyKey, {
+      userMessage: args.userMessage,
+      narrative: args.narrative,
+      thought: args.thought,
+      statsSnapshot: {
+        location: st.location,
+        timeOfDay: st.timeOfDay,
+        mood: st.mood,
+        outfit: st.outfit,
+        affection: st.affection,
+      },
+      options: normalizedOptions.length > 0 ? normalizedOptions : undefined,
+    });
+
+    const payload = buildBootstrapPayload({ omitAvatars: true });
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Committed turn #${turn.index} (${turn.turnId}). Live state: location="${st.location}", mood="${st.mood}", outfit="${st.outfit}", affection=${st.affection}.`,
+        },
+      ],
+      structuredContent: payload,
+    };
+  },
+);
+
+server.registerTool(
   'tavern_get_state',
   {
     title: 'Get Live RP State',
-    description: 'Read the active character card summary, current live RP state (location, mood, affection, inventory, goals, summary), and active preset name.',
+    description:
+      'Read the active character card summary, current live RP state (location, mood, outfit, affection, inventory, goals, summary), and active preset name.',
     inputSchema: {
       conversationId: z.string().optional(),
     },
@@ -181,12 +281,14 @@ server.registerTool(
   'tavern_update_state',
   {
     title: 'Update Live RP State',
-    description: 'Persist updates to live Roleplay state (location, timeOfDay, mood, affection, inventory, activeGoals, summary, customFields) so the side pane and future turns stay in sync.',
+    description:
+      'Persist updates to live Roleplay state (location, timeOfDay, mood, outfit, affection, inventory, activeGoals, summary, customFields).',
     inputSchema: {
       conversationId: z.string().optional(),
       location: z.string().optional(),
       timeOfDay: z.string().optional(),
       mood: z.string().optional(),
+      outfit: z.string().optional(),
       affection: z.number().optional(),
       affectionDelta: z.number().optional(),
       inventory: z.array(z.string()).optional(),
@@ -201,6 +303,7 @@ server.registerTool(
     if (args.location !== undefined) st.location = args.location;
     if (args.timeOfDay !== undefined) st.timeOfDay = args.timeOfDay;
     if (args.mood !== undefined) st.mood = args.mood;
+    if (args.outfit !== undefined) st.outfit = args.outfit;
     if (args.affection !== undefined) st.affection = args.affection;
     if (args.affectionDelta !== undefined) st.affection += args.affectionDelta;
     if (args.inventory !== undefined) st.inventory = args.inventory;
@@ -265,7 +368,8 @@ server.registerTool(
   'tavern_save_snapshot',
   {
     title: 'Save Story Snapshot',
-    description: 'Save a checkpoint snapshot of current RP state and recent summary for branching or resuming in a fresh conversation.',
+    description:
+      'Save a checkpoint snapshot of current RP state and recent summary for branching or resuming in a fresh conversation.',
     inputSchema: {
       title: z.string(),
       summary: z.string().optional(),
@@ -304,17 +408,14 @@ server.registerTool(
   'tavern_app_bootstrap',
   {
     title: 'Bootstrap App Data',
-    description: 'Fetch all cards, presets, lorebooks, config, and session state for the side-pane UI.',
+    description: 'Fetch all cards, presets, lorebooks, config, story turns, and session state for the side-pane UI.',
     inputSchema: {},
     _meta: APP_ONLY_META,
   },
-  async () => {
-    const payload = buildBootstrapPayload();
-    return {
-      content: [{ type: 'text', text: 'ok' }],
-      structuredContent: payload,
-    };
-  },
+  async () => ({
+    content: [{ type: 'text', text: 'ok' }],
+    structuredContent: buildBootstrapPayload(),
+  }),
 );
 
 server.registerTool(
@@ -343,6 +444,36 @@ server.registerTool(
     return {
       content: [{ type: 'text', text: `Imported card ${card.name}` }],
       structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'tavern_app_export_agent',
+  {
+    title: 'Export Character Card to Custom Agent',
+    description: 'Export a character card into an Antigravity Custom Agent markdown file under agents/.',
+    inputSchema: {
+      cardId: z.string(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ cardId }) => {
+    const card = storage.getCard(cardId);
+    if (!card) throw new Error(`Card not found: ${cardId}`);
+    const config = storage.getConfig();
+    const preset = config.activePresetId ? storage.getPreset(config.activePresetId) : null;
+    const agentsDir = process.env.TAVERN_PLUGIN_ROOT
+      ? path.join(process.env.TAVERN_PLUGIN_ROOT, 'agents')
+      : path.join(storage.rootDir, 'exported-agents');
+
+    const exported = exportCardToCustomAgent({ card, preset, config, agentsDir });
+    return {
+      content: [{ type: 'text', text: `Exported Custom Agent ${exported.agentName}` }],
+      structuredContent: {
+        ...buildBootstrapPayload(),
+        exportedAgent: exported,
+      },
     };
   },
 );
@@ -418,9 +549,7 @@ server.registerTool(
   },
   async ({ presetId, identifier, enabled }) => {
     const preset = storage.getPreset(presetId);
-    if (!preset) {
-      throw new Error(`Preset not found: ${presetId}`);
-    }
+    if (!preset) throw new Error(`Preset not found: ${presetId}`);
     const target = preset.prompts.find((p) => p.identifier === identifier);
     if (target) {
       target.enabled = enabled;
@@ -456,6 +585,78 @@ server.registerTool(
     return {
       content: [{ type: 'text', text: 'config updated' }],
       structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'tavern_app_edit_turn',
+  {
+    title: 'Edit Story Turn Narrative',
+    description: 'Edit a committed turn narrative in the local JSONL story log.',
+    inputSchema: {
+      turnId: z.string(),
+      narrative: z.string(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ turnId, narrative }) => {
+    const config = storage.getConfig();
+    storyLog.editTurn(config.activeCardId || 'default', turnId, narrative);
+    return {
+      content: [{ type: 'text', text: 'turn edited' }],
+      structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'tavern_app_rollback_turn',
+  {
+    title: 'Rollback or Delete Story Turn',
+    description: 'Roll back JSONL story log to a specific turn (inclusive=true keeps it; inclusive=false deletes it for re-roll).',
+    inputSchema: {
+      turnId: z.string(),
+      inclusive: z.boolean(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ turnId, inclusive }) => {
+    const config = storage.getConfig();
+    storyLog.rollbackToTurn(config.activeCardId || 'default', turnId, inclusive);
+    return {
+      content: [{ type: 'text', text: 'story rolled back' }],
+      structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'tavern_app_prepare_fork',
+  {
+    title: 'Prepare Branched Session Fork',
+    description: 'Stage the current edited/rolled-back JSONL story log so the next new conversation resumes seamlessly.',
+    inputSchema: {},
+    _meta: APP_ONLY_META,
+  },
+  async () => {
+    const config = storage.getConfig();
+    const cardId = config.activeCardId || 'default';
+    const session = storage.getSession(DEFAULT_SESSION_ID);
+    const turns = storyLog.readTurns(cardId);
+    storage.setPendingFork({
+      cardId,
+      turns,
+      state: { ...session.state },
+      createdAt: new Date().toISOString(),
+    });
+    return {
+      content: [{ type: 'text', text: 'pending fork staged' }],
+      structuredContent: {
+        ...buildBootstrapPayload(),
+        forkReady: true,
+        turnCount: turns.length,
+      },
     };
   },
 );

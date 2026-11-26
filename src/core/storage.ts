@@ -6,6 +6,7 @@ import {
   createDefaultState,
   type CharacterCard,
   type Lorebook,
+  type PendingForkContext,
   type Preset,
   type SessionRuntime,
   type SessionSnapshot,
@@ -181,6 +182,24 @@ export class TavernStorage {
   saveSnapshot(snapshot: SessionSnapshot): SessionSnapshot {
     writeJsonAtomic(this.subPath('snapshots', `${safeId(snapshot.id)}.json`), snapshot);
     return snapshot;
+  }
+
+  // --- Pending Branch Fork (consumed once on next SessionStart) ---
+  setPendingFork(fork: PendingForkContext): void {
+    writeJsonAtomic(this.subPath('pending-fork.json'), fork);
+  }
+
+  consumePendingFork(): PendingForkContext | null {
+    const p = this.subPath('pending-fork.json');
+    const data = readJsonSafe<PendingForkContext>(p);
+    if (data && fs.existsSync(p)) {
+      try {
+        fs.unlinkSync(p);
+      } catch {
+        // ignore
+      }
+    }
+    return data;
   }
 
   private listCollection<T>(folder: string): T[] {

@@ -1,5 +1,6 @@
 import { TavernStorage } from '../core/storage.js';
 import { assembleSessionStart } from '../core/prompt-assembler.js';
+import { StoryLogStore } from '../core/story-log.js';
 import type { Lorebook } from '../core/types.js';
 
 interface SessionStartInput {
@@ -41,12 +42,26 @@ async function main(): Promise<void> {
   const convId = payload.conversationId || 'default';
   const session = storage.getSession(convId);
 
+  // If the user triggered a Swipe/Edit branch fork from the side pane, consume and inject it
+  let resumedStoryBlock = '';
+  const pendingFork = storage.consumePendingFork();
+  if (pendingFork && pendingFork.cardId === card.id) {
+    session.state = { ...session.state, ...pendingFork.state };
+    const storyLog = new StoryLogStore(storage.rootDir);
+    resumedStoryBlock = storyLog.formatForForkResume(
+      pendingFork.turns,
+      card.name,
+      config.userName || 'User',
+    );
+  }
+
   const bundle = assembleSessionStart({
     config,
     card,
     preset,
     lorebooks,
     session,
+    resumedStoryBlock,
   });
 
   session.variables = bundle.variables;

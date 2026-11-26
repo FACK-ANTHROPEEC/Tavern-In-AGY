@@ -49,6 +49,7 @@ interface LiveState {
   location: string;
   timeOfDay: string;
   mood: string;
+  outfit: string;
   affection: number;
   inventory: string[];
   activeGoals: string[];
@@ -59,6 +60,20 @@ interface WaveOption {
   label: string;
   category: string;
   text: string;
+}
+
+interface StoryTurnItem {
+  turnId: string;
+  index: number;
+  userMessage?: string;
+  narrative: string;
+  statsSnapshot?: {
+    location?: string;
+    mood?: string;
+    outfit?: string;
+    affection?: number;
+  };
+  createdAt: string;
 }
 
 interface TavernConfig {
@@ -80,10 +95,12 @@ interface BootstrapData {
   lorebooks: LorebookSummary[];
   sessionState: LiveState;
   latestOptions: WaveOption[];
+  storyTurns: StoryTurnItem[];
   dataDir: string;
+  exportedAgent?: { agentName: string; filePath: string; slashHint: string };
 }
 
-type TabKey = 'cards' | 'presets' | 'lorebooks' | 'state';
+type TabKey = 'cards' | 'presets' | 'lorebooks' | 'state' | 'story';
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -103,16 +120,25 @@ export function AppView() {
   const [presetSearch, setPresetSearch] = useState('');
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   const [canMessage, setCanMessage] = useState(false);
+  const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
+  const [editingDraft, setEditingDraft] = useState<string>('');
 
   useEffect(() => {
-    const app = new App({ name: 'TavernInAGY', version: '0.1.0' }, {});
+    const app = new App({ name: 'TavernInAGY', version: '0.4.0' }, {});
     appRef.current = app;
 
     app.ontoolresult = (result) => {
       const sc = result?.structuredContent as BootstrapData | undefined;
       if (sc && sc.config) {
-        setData(sc);
-        setStatusMsg('已同步最新酒馆数据');
+        setData((prev) => ({
+          ...sc,
+          // Preserve avatars already loaded via app-only bootstrap when lean commit_turn updates arrive
+          cards: sc.cards.map((c) => {
+            const old = prev?.cards.find((x) => x.id === c.id);
+            return { ...c, avatarDataUrl: c.avatarDataUrl ?? old?.avatarDataUrl };
+          }),
+        }));
+        setStatusMsg('MVU 面板已实时刷新');
       }
     };
 
@@ -136,17 +162,19 @@ export function AppView() {
       });
   }, []);
 
-  async function callTool(name: string, args: Record<string, unknown>) {
+  async function callTool(name: string, args: Record<string, unknown>): Promise<BootstrapData | undefined> {
     const app = appRef.current;
-    if (!app) return;
+    if (!app) return undefined;
     try {
       const res = await app.callServerTool({ name, arguments: args });
       const sc = res?.structuredContent as BootstrapData | undefined;
       if (sc && sc.config) {
         setData(sc);
       }
+      return sc;
     } catch (err) {
       setStatusMsg(`操作失败: ${String(err)}`);
+      return undefined;
     }
   }
 
@@ -164,6 +192,14 @@ export function AppView() {
     });
     setStatusMsg(`已导入角色卡: ${file.name}`);
     e.target.value = '';
+  }
+
+  async function handleExportAgent(cardId: string) {
+    setStatusMsg('正在导出 Custom Agent...');
+    const res = await callTool('tavern_app_export_agent', { cardId });
+    if (res?.exportedAgent) {
+      setStatusMsg(`已导出 Custom Agent: ${res.exportedAgent.slashHint}`);
+    }
   }
 
   async function handlePresetUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -204,6 +240,25 @@ export function AppView() {
     setStatusMsg(`已发送行动: ${opt.label}`);
   }
 
+  async function handleForkBranch() {
+    await callTool('tavern_app_prepare_fork', {});
+    const app = appRef.current;
+    if (app && canMessage) {
+      try {
+        await app.sendMessage({
+          role: 'user',
+          content: [{ type: 'text', text: '请从当前分支点无缝续写下一轮剧情。' }],
+          _meta: { 'com.google.antigravity/message': { target: 'new' } },
+        } as Parameters<App['sendMessage']>[0]);
+        setStatusMsg('已拉起全新分支会话，SessionStart 将自动接力修剪后的楼层！');
+        return;
+      } catch {
+        // Fallback to manual new chat
+      }
+    }
+    setStatusMsg('分支状态已就绪！请直接点击新建对话，SessionStart 将自动接力当前修剪后的楼层。');
+  }
+
   const activePreset = useMemo(() => {
     if (!data?.config.activePresetId) return null;
     return data.presets.find((p) => p.id === data.config.activePresetId) ?? null;
@@ -238,7 +293,7 @@ export function AppView() {
     return (
       <div className="app-shell">
         <div className="card-box">
-          <strong>TavernInAGY</strong>
+          <strong>TavernInAGY v0.4</strong>
           <div className="muted">{statusMsg}</div>
         </div>
       </div>
@@ -258,13 +313,13 @@ export function AppView() {
             callTool('tavern_app_update_config', { enabled: !data.config.enabled })
           }
         >
-          {data.config.enabled ? '暂停注入' : '启用注入'}
+          {data.config.enabled ? '暂停' : '启用'}
         </button>
       </div>
 
       <div className="tabs">
         <button className={`tab-btn ${tab === 'cards' ? 'active' : ''}`} onClick={() => setTab('cards')}>
-          角色卡 ({data.cards.length})
+          角色 ({data.cards.length})
         </button>
         <button className={`tab-btn ${tab === 'presets' ? 'active' : ''}`} onClick={() => setTab('presets')}>
           预设 ({data.presets.length})
@@ -273,21 +328,24 @@ export function AppView() {
           世界书 ({data.lorebooks.length})
         </button>
         <button className={`tab-btn ${tab === 'state' ? 'active' : ''}`} onClick={() => setTab('state')}>
-          状态与选项
+          MVU状态
+        </button>
+        <button className={`tab-btn ${tab === 'story' ? 'active' : ''}`} onClick={() => setTab('story')}>
+          楼层 ({data.storyTurns?.length ?? 0})
         </button>
       </div>
 
       {tab === 'cards' && (
         <div className="card-box">
           <div className="row">
-            <strong>角色卡库（ST PNG V2/V3 & JSON）</strong>
+            <strong>角色卡库（PNG V2/V3 & JSON）</strong>
             <label className="btn btn-primary">
-              + 导入角色卡
+              + 导入
               <input type="file" accept=".png,.json" hidden onChange={handleCardUpload} />
             </label>
           </div>
           {data.cards.length === 0 && (
-            <div className="muted">暂未导入角色卡，点击右上角即可导入原版 SillyTavern PNG/JSON 角色卡。</div>
+            <div className="muted">暂未导入角色卡，点击右上角导入 ST 角色卡，并可一键导出为 Custom Agent。</div>
           )}
           {data.cards.map((card) => {
             const isActive = data.config.activeCardId === card.id;
@@ -312,7 +370,10 @@ export function AppView() {
                         })
                       }
                     >
-                      {isActive ? '当前激活' : '启用'}
+                      {isActive ? '已激活' : '启用'}
+                    </button>
+                    <button className="btn" onClick={() => handleExportAgent(card.id)} title="导出为独立 Custom Agent">
+                      导出Agent
                     </button>
                     <button
                       className="btn btn-danger"
@@ -334,7 +395,7 @@ export function AppView() {
           <div className="row">
             <strong>社区预设（Prompt Manager）</strong>
             <label className="btn btn-primary">
-              + 导入预设 JSON
+              + 导入 JSON
               <input type="file" accept=".json" hidden onChange={handlePresetUpload} />
             </label>
           </div>
@@ -369,9 +430,7 @@ export function AppView() {
 
           {activePreset && (
             <>
-              <div className="muted">
-                采样参数（Temp/Top-P）由 AGY 宿主托管；下方可按分组一键开关任意社区模块。
-              </div>
+              <div className="muted">采样参数由 AGY 宿主托管；下方可按分组一键开关任意社区模块。</div>
               <input
                 className="input"
                 placeholder="搜索预设条目名称或 ID..."
@@ -436,7 +495,7 @@ export function AppView() {
           <div className="row">
             <strong>世界书（World Info）</strong>
             <label className="btn btn-primary">
-              + 导入世界书 JSON
+              + 导入 JSON
               <input type="file" accept=".json" hidden onChange={handleLorebookUpload} />
             </label>
           </div>
@@ -466,7 +525,7 @@ export function AppView() {
                 <div>
                   <strong>{book.name}</strong>
                   <div className="muted">
-                    共 {book.entryCount} 条 · 常驻 {book.constantCount} 条 · 扫描深度 {book.scanDepth}
+                    共 {book.entryCount} 条 · 常驻 {book.constantCount} 条 · 深度 {book.scanDepth}
                   </div>
                 </div>
                 <div className="row">
@@ -496,7 +555,20 @@ export function AppView() {
       {tab === 'state' && (
         <>
           <div className="card-box">
-            <strong>我的设定（User Persona）</strong>
+            <strong>MVU 实时状态栏</strong>
+            <div className="muted">时间：{data.sessionState.timeOfDay || '未记录'} · 地点：{data.sessionState.location || '未记录'}</div>
+            <div className="muted">情绪：{data.sessionState.mood || '未记录'} · 好感：{data.sessionState.affection}</div>
+            <div className="muted">衣着：{data.sessionState.outfit || '未记录'}</div>
+            {data.sessionState.inventory.length > 0 && (
+              <div className="muted">背包：{data.sessionState.inventory.join('、')}</div>
+            )}
+            {data.sessionState.summary && (
+              <div className="muted">摘要：{data.sessionState.summary}</div>
+            )}
+          </div>
+
+          <div className="card-box">
+            <strong>玩家设定（User Persona）</strong>
             <input
               className="input"
               placeholder="玩家称呼 ({{user}})"
@@ -509,19 +581,6 @@ export function AppView() {
               defaultValue={data.config.userPersona}
               onBlur={(e) => callTool('tavern_app_update_config', { userPersona: e.target.value })}
             />
-          </div>
-
-          <div className="card-box">
-            <strong>当前实时状态</strong>
-            <div className="muted">时间：{data.sessionState.timeOfDay || '未记录'}</div>
-            <div className="muted">地点：{data.sessionState.location || '未记录'}</div>
-            <div className="muted">情绪：{data.sessionState.mood || '未记录'} · 好感：{data.sessionState.affection}</div>
-            {data.sessionState.inventory.length > 0 && (
-              <div className="muted">背包：{data.sessionState.inventory.join('、')}</div>
-            )}
-            {data.sessionState.summary && (
-              <div className="muted">摘要：{data.sessionState.summary}</div>
-            )}
           </div>
 
           {data.latestOptions.length > 0 && (
@@ -541,6 +600,97 @@ export function AppView() {
             </div>
           )}
         </>
+      )}
+
+      {tab === 'story' && (
+        <div className="card-box">
+          <div className="row">
+            <strong>JSONL 剧情楼层（编辑 / 曲线重 Roll）</strong>
+            <button className="btn btn-primary" onClick={handleForkBranch}>
+              ✨ 从当前分支续写
+            </button>
+          </div>
+          <div className="muted">
+            对话调用 <code>tavern_commit_turn</code> 后自动落盘。可编辑任意楼层或回退删楼，再点右上角拉起全新干净分支续写。
+          </div>
+          {(!data.storyTurns || data.storyTurns.length === 0) && (
+            <div className="muted">当前角色暂无已落盘楼层。</div>
+          )}
+          {(data.storyTurns ?? []).map((t) => {
+            const isEditing = editingTurnId === t.turnId;
+            return (
+              <div key={t.turnId} className="card-box" style={{ background: 'var(--bg-1)' }}>
+                <div className="row">
+                  <strong>
+                    #{t.index}{' '}
+                    {t.statsSnapshot?.location ? <span className="badge">{t.statsSnapshot.location}</span> : null}
+                  </strong>
+                  <div className="row">
+                    {!isEditing ? (
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          setEditingTurnId(t.turnId);
+                          setEditingDraft(t.narrative);
+                        }}
+                      >
+                        编辑
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-primary"
+                        onClick={async () => {
+                          await callTool('tavern_app_edit_turn', {
+                            turnId: t.turnId,
+                            narrative: editingDraft,
+                          });
+                          setEditingTurnId(null);
+                          setStatusMsg(`已保存第 #${t.index} 楼修改`);
+                        }}
+                      >
+                        保存
+                      </button>
+                    )}
+                    <button
+                      className="btn"
+                      onClick={async () => {
+                        await callTool('tavern_app_rollback_turn', {
+                          turnId: t.turnId,
+                          inclusive: true,
+                        });
+                        setStatusMsg(`已回退并保留至第 #${t.index} 楼`);
+                      }}
+                    >
+                      保留至此
+                    </button>
+                    <button
+                      className="btn btn-danger"
+                      onClick={async () => {
+                        await callTool('tavern_app_rollback_turn', {
+                          turnId: t.turnId,
+                          inclusive: false,
+                        });
+                        setStatusMsg(`已删掉第 #${t.index} 楼及之后内容（可点分支续写重 Roll）`);
+                      }}
+                    >
+                      删楼重Roll
+                    </button>
+                  </div>
+                </div>
+                {t.userMessage && <div className="muted">玩家：{t.userMessage}</div>}
+                {isEditing ? (
+                  <textarea
+                    className="textarea"
+                    value={editingDraft}
+                    onChange={(e) => setEditingDraft(e.target.value)}
+                  />
+                ) : (
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{t.narrative}</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
 
       <div className="status-banner">{statusMsg}</div>

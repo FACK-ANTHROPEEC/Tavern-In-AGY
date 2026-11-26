@@ -86,12 +86,37 @@ export interface LiveCharacterState {
   location: string;
   timeOfDay: string;
   mood: string;
+  outfit: string;
   affection: number;
   inventory: string[];
   activeGoals: string[];
   customFields: Record<string, string>;
   summary: string;
   updatedAt: string;
+}
+
+export interface StoryTurn {
+  turnId: string;
+  index: number;
+  userMessage?: string;
+  narrative: string;
+  thought?: string;
+  statsSnapshot?: {
+    location?: string;
+    timeOfDay?: string;
+    mood?: string;
+    outfit?: string;
+    affection?: number;
+  };
+  options?: Array<{ label: string; category: string; text: string }>;
+  createdAt: string;
+}
+
+export interface PendingForkContext {
+  cardId: string;
+  turns: StoryTurn[];
+  state: LiveCharacterState;
+  createdAt: string;
 }
 
 export interface SessionRuntime {
@@ -137,6 +162,7 @@ export function createDefaultState(): LiveCharacterState {
     location: '',
     timeOfDay: '',
     mood: '',
+    outfit: '',
     affection: 0,
     inventory: [],
     activeGoals: [],
