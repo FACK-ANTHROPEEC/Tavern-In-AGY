@@ -93,16 +93,14 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
       hasEmbeddedLorebook: Boolean(c.embeddedLorebook),
       embeddedLorebookName: c.embeddedLorebook?.name,
       embeddedLorebookCount: c.embeddedLorebook?.entries.length ?? 0,
-      embeddedLorebookEntries: opts?.omitAvatars
-        ? undefined
-        : (c.embeddedLorebook?.entries ?? []).map((e) => ({
-            uid: e.uid,
-            comment: e.comment,
-            keys: e.keys,
-            constant: e.constant,
-            enabled: e.enabled,
-            order: e.order,
-          })),
+      embeddedLorebookEntries: (c.embeddedLorebook?.entries ?? []).map((e) => ({
+        uid: e.uid,
+        comment: e.comment,
+        keys: e.keys,
+        constant: e.constant,
+        enabled: e.enabled,
+        order: e.order,
+      })),
       hasFrontendHtml: Boolean(
         c.regexScripts?.some((r) => !r.disabled && isHtmlBeautifyRegex(r.replaceString)),
       ),

@@ -209,7 +209,11 @@ export function AppView() {
           activeDisplayRegexScripts: sc.activeDisplayRegexScripts ?? prev?.activeDisplayRegexScripts,
           cards: sc.cards.map((c) => {
             const old = prev?.cards.find((x) => x.id === c.id);
-            return { ...c, avatarDataUrl: c.avatarDataUrl ?? old?.avatarDataUrl };
+            return {
+              ...c,
+              avatarDataUrl: c.avatarDataUrl ?? old?.avatarDataUrl,
+              embeddedLorebookEntries: c.embeddedLorebookEntries ?? old?.embeddedLorebookEntries,
+            };
           }),
         }));
         setPendingSend(null);
