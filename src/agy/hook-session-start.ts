@@ -47,6 +47,9 @@ async function main(): Promise<void> {
   const pendingFork = storage.consumePendingFork();
   if (pendingFork && pendingFork.cardId === card.id) {
     session.state = { ...session.state, ...pendingFork.state };
+    if (pendingFork.statData) {
+      session.statData = { ...pendingFork.statData };
+    }
     const storyLog = new StoryLogStore(storage.rootDir);
     resumedStoryBlock = storyLog.formatForForkResume(
       pendingFork.turns,
@@ -65,6 +68,7 @@ async function main(): Promise<void> {
   });
 
   session.variables = bundle.variables;
+  session.statData = bundle.statData;
   storage.saveSession(session);
 
   if (!bundle.systemMessage.trim()) {

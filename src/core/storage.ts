@@ -151,7 +151,13 @@ export class TavernStorage {
   getSession(conversationId: string): SessionRuntime {
     const p = this.subPath('sessions', `${safeId(conversationId)}.json`);
     const existing = readJsonSafe<SessionRuntime>(p);
-    if (existing) return existing;
+    if (existing) {
+      return {
+        ...existing,
+        statData: existing.statData ?? {},
+        state: { ...createDefaultState(), ...(existing.state ?? {}) },
+      };
+    }
     return {
       conversationId,
       turnCount: 0,
@@ -161,6 +167,7 @@ export class TavernStorage {
       lastPostHistoryTurn: 0,
       recentMessages: [],
       variables: {},
+      statData: {},
       state: createDefaultState(),
       latestOptions: [],
     };

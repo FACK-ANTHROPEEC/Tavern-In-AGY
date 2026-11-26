@@ -1,29 +1,30 @@
 # Project Progress & Context Snapshot
 
 ## 1. 当前状态与里程碑
-- **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agents）打造的 SillyTavern 兼容 Roleplay 引擎，零反代、零凭据抽取，原生兼容 ST 角色卡（PNG V2/V3 & JSON）、世界书与社区预设。
-- **当前阶段**：**v0.5.0** 暖墨衬线书卷风直聊阅读器主页已构建并安装（Git 标签 `v0.1.0`～`v0.5.0`）。
-- **最近完成**：升级至 `v0.5.0`，将「正文」设为默认首页（全高固定布局：顶部精简栏 + MVU 迷你状态条 + 中部暖墨横纹衬线小说阅读流 + 底部常驻直聊输入框与快捷选项按钮），并完整复刻暖深墨配色、宋体衬线排版与莫兰迪暖棕胶囊开关。
-- **验证状态**：`npm test` 5 套件 / 14 项测试全部通过（含 1MB 真实社区预设 `我即浪潮` 集成测试）；`npm run build` 零错误通过；插件已安装就绪，待用户在 AGY 右侧边栏实机体验反馈。
+- **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agent `tavern-rp`）打造的 SillyTavern 全通用兼容 Roleplay 引擎，零反代、零凭据抽取。
+- **当前阶段**：**v0.6.0** 全通用 MVU + EJS + 侧边栏 `TavernHelper` 垫片舞台已完成测试、构建与安装（Git 标签 `v0.1.0`～`v0.6.0`）。
+- **最近完成**：实现通用真 MVU 引擎（`[initvar]`、`stat_data` 每楼层快照与回滚、`<update>` RFC 6902 JSON Patch、`_` 只读保护）、通用 EJS 模板引擎（`ST-Prompt-Template`）、酒馆助手多作用域变量宏、动态图床 CSP 白名单采集、暖墨通用 `stat_data` 属性树与侧边栏 `TavernHelper` 垫片/悬浮球舞台。
+- **验证状态**：`npm test` 6 套件 / 19 项测试全绿（含真实 1MB 社区预设 `我即浪潮` + 两张真卡《恶女婊子》MVU 卡与《大辰辰皇 V6》集成验收）；`npm run build` 与 `npm run install:plugin` 通过。
 
 ## 2. 架构约束与关键契约
 - **目录与分层红线**：
-  - `src/core/` 保持零 AGY 宿主依赖；`src/agy/` 作为薄适配层；`src/ui/` 单文件打包（`vite-plugin-singlefile`，<10 MiB），不依赖 `localStorage`。
-- **三层注入与分支接力契约**：
-  - `SessionStart` 注入 L1 静态层，并自动消费 `pending-fork.json` 无损接力侧边栏修剪后的 JSONL 分支剧情；
-  - `PreInvocation` 按 `conversationId + lastUserInputHash` 去重，注入 L2 世界书（带 `cooldownTurns` 冷却去重）与 L3 近因锚点/变更状态；
-  - `tavern_commit_turn` 声明 `ui.resourceUri = "ui://tavern/app.html"`，写盘 `stories/<cardId>.jsonl` 并实时刷新 MVU 面板；`tavern_open_panel` 省略大体积头像防超 1 MiB 轨迹上限，前端再由 app-only `tavern_app_bootstrap` 拉全量。
+  - `src/core/` 零 AGY 宿主依赖（含 `mvu-engine.ts`、`ejs-engine.ts`、`macro-engine.ts`、`card-parser.ts`、`preset-parser.ts`、`lorebook-engine.ts`、`story-log.ts`）；
+  - `src/agy/` 薄适配层；`src/ui/` 单文件打包（`vite-plugin-singlefile`），暖墨衬线书卷主题固定不随宿主冷色覆盖。
+- **核心契约**：
+  - `card-parser.ts` 通用提取 `regex_scripts`、`tavern_helper.scripts`、`customExtensions` 与 `resourceOrigins`；`mcp-server.ts` 动态注入 `_meta.ui.csp.resourceDomains`；
+  - `tavern_commit_turn` 自动执行 `applyMvuUpdates`、绑定 `statData` 到 JSONL 楼层并清洗标签；`tavern_app_rollback_turn` 精确回滚对应楼层的 `statData`；
+  - `TavernFrontendHost.tsx` 通过 `Proxy` 将 `window.parent` / `document.body` 重定向至侧边栏内部舞台，不触碰 AGY 主窗口 DOM。
 - **环境与避坑约束**：
-  - Windows PowerShell 5.1 不支持 `&&`；用户私人预设 `我即浪潮-*.json` 已在 `.gitignore` 中排除。
+  - Windows PowerShell 5.1 不支持 `&&`；`卡片参考/` 与 `我即浪潮-*.json` 已在 `.gitignore` 排除。
 
 ## 3. 下一步计划（按优先级）
-1. 用户在 AGY 右侧边栏打开 **TavernInAGY** 实机导卡、导 `我即浪潮` 预设并跑一轮真实对话，收集 UI 手感与实机问题。
-2. 按实机体验迭代：侧边栏手动修改状态栏数值、更多 `regex_scripts` 卡片渲染、角色卡/世界书在线编辑。
+1. 用户在 AGY 右侧边栏重开 **TavernInAGY**，实测导入《恶女婊子》与《大辰辰皇 V6》体验 MVU 属性树、前端状态栏渲染与侧边栏悬浮球舞台。
+2. 根据实机运行具体卡前端脚本时的日志反馈，按需补齐更多 `TavernHelper` API 垫片方法或正则渲染细节。
 
 ## 4. 核心文件索引
-- `docs/DESIGN.md`：项目级架构与三层注入设计文档
-- `src/core/macro-engine.ts` / `card-parser.ts` / `preset-parser.ts` / `lorebook-engine.ts`：ST 兼容核心引擎
-- `src/core/story-log.ts` & `src/core/agent-exporter.ts`：JSONL 剧情楼层管理与 Custom Agent 导出器
-- `src/agy/mcp-server.ts` & `src/agy/hook-*.ts`：MCP Server（含 `tavern_commit_turn` MVU）与生命周期钩子
-- `src/ui/App.tsx`：React 单文件 5-Tab 侧边栏控制台（角色/预设/世界书/MVU状态/楼层分支）
-- `plugin/` & `scripts/install-plugin.mjs`：AGY 插件清单、Skill 与一键安装脚本
+- `docs/DESIGN.md`：项目级架构文档
+- `src/core/mvu-engine.ts` & `src/core/ejs-engine.ts`：通用真 MVU（RFC 6902 JSON Patch / `[initvar]`）与 `ST-Prompt-Template` EJS 引擎
+- `src/core/card-parser.ts` / `preset-parser.ts` / `lorebook-engine.ts` / `macro-engine.ts` / `story-log.ts`：ST 全生态解析与存储核心
+- `src/agy/mcp-server.ts` & `src/agy/hook-*.ts`：MCP Server（动态 CSP + MVU 工具）与自动分层注入钩子
+- `src/ui/App.tsx` / `MvuTreeView.tsx` / `TavernFrontendHost.tsx`：暖墨衬线直聊主页、MVU 属性树与侧边栏 `TavernHelper` 垫片舞台
+- `plugin/agents/tavern-rp.md`：单一常驻纯净 RP 模式 Custom Agent

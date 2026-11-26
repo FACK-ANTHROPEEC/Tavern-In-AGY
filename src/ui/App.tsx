@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { App } from '@modelcontextprotocol/ext-apps';
+import { MvuTreeView } from './MvuTreeView';
+import { TavernFrontendHost, type CardFrontendPayload } from './TavernFrontendHost';
 
 interface CardSummary {
   id: string;
@@ -12,6 +14,8 @@ interface CardSummary {
   avatarDataUrl?: string;
   hasEmbeddedLorebook: boolean;
   embeddedLorebookCount: number;
+  hasFrontendHtml?: boolean;
+  hasHelperScripts?: boolean;
 }
 
 interface PresetPromptSummary {
@@ -90,6 +94,7 @@ interface BootstrapData {
   presets: PresetSummary[];
   lorebooks: LorebookSummary[];
   sessionState: LiveState;
+  statData?: Record<string, unknown>;
   latestOptions: WaveOption[];
   storyTurns: StoryTurnItem[];
   dataDir: string;
@@ -148,6 +153,7 @@ export function AppView() {
   const [composerText, setComposerText] = useState<string>('');
   const [pendingSend, setPendingSend] = useState<string | null>(null);
   const [showOptions, setShowOptions] = useState<boolean>(true);
+  const [cardFrontend, setCardFrontend] = useState<CardFrontendPayload | null>(null);
 
   useEffect(() => {
     const app = new App({ name: 'TavernInAGY', version: '0.5.0' }, {});
@@ -858,8 +864,58 @@ export function AppView() {
 
           {tab === 'state' && (
             <>
+              {activeCard && (activeCard.hasFrontendHtml || activeCard.hasHelperScripts) && (
+                cardFrontend && cardFrontend.cardId === activeCard.id ? (
+                  <TavernFrontendHost
+                    frontend={cardFrontend}
+                    statData={data.statData ?? {}}
+                    userName={data.config.userName || 'User'}
+                    storyTurns={data.storyTurns ?? []}
+                    onSendSlashOrMessage={(txt) => sendTextToChat(txt)}
+                    onUpdateStatData={(nextStat) =>
+                      callTool('tavern_app_set_stat_data', { statData: nextStat })
+                    }
+                  />
+                ) : (
+                  <div className="card-box">
+                    <div className="row">
+                      <div>
+                        <strong>✨ 检测到角色卡自带前端美化 / 助手脚本</strong>
+                        <div className="muted">
+                          可在侧边栏通过 TavernHelper 垫片加载，完全不碰 AGY 主窗口。
+                        </div>
+                      </div>
+                      <button
+                        className="btn btn-primary"
+                        onClick={async () => {
+                          const app = appRef.current;
+                          if (!app) return;
+                          setStatusMsg('正在加载角色卡前端资源...');
+                          const res = await app.callServerTool({
+                            name: 'tavern_app_get_card_frontend',
+                            arguments: { cardId: activeCard.id },
+                          });
+                          const sc = res?.structuredContent as CardFrontendPayload | undefined;
+                          if (sc) {
+                            setCardFrontend(sc);
+                            setStatusMsg('角色卡前端资源已就绪');
+                          }
+                        }}
+                      >
+                        加载美化舞台
+                      </button>
+                    </div>
+                  </div>
+                )
+              )}
+
               <div className="card-box">
-                <strong>MVU 实时状态栏</strong>
+                <strong>MVU 变量树（stat_data）</strong>
+                <MvuTreeView data={data.statData ?? {}} />
+              </div>
+
+              <div className="card-box">
+                <strong>基础状态栏</strong>
                 <div className="muted">时辰：{data.sessionState.timeOfDay || '未记录'} · 地点：{data.sessionState.location || '未记录'}</div>
                 <div className="muted">情绪：{data.sessionState.mood || '未记录'} · 好感：{data.sessionState.affection}</div>
                 <div className="muted">衣着：{data.sessionState.outfit || '未记录'}</div>

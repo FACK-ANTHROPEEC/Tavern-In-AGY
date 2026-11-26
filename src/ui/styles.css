@@ -520,3 +520,28 @@ body {
   color: var(--ink-text-muted);
   font-size: 11.5px;
 }
+
+.mvu-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 4px;
+  border-bottom: 1px dashed rgba(218, 206, 185, 0.08);
+  font-size: 12px;
+}
+
+.mvu-row:last-child {
+  border-bottom: none;
+}
+
+.mvu-key {
+  color: var(--ink-text-muted);
+  flex-shrink: 0;
+}
+
+.mvu-val {
+  color: var(--ink-text-bright);
+  text-align: right;
+  word-break: break-word;
+}

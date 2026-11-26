@@ -9,7 +9,8 @@ import { parseCharacterCardJson, parseCharacterCardPng } from '../core/card-pars
 import { parsePresetJson } from '../core/preset-parser.js';
 import { parseLorebookJson, scanLorebooks } from '../core/lorebook-engine.js';
 import { StoryLogStore } from '../core/story-log.js';
-import type { Lorebook } from '../core/types.js';
+import { applyMvuUpdates, extractInitVarFromLorebooks } from '../core/mvu-engine.js';
+import type { CharacterCard, Lorebook } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -36,6 +37,29 @@ function loadAppHtml(): string {
   return '<!doctype html><html><body><h2>TavernInAGY UI not built yet</h2><p>Run <code>npm run build:ui</code>.</p></body></html>';
 }
 
+function collectDynamicResourceDomains(): string[] {
+  const origins = new Set<string>([
+    'https://files.catbox.moe',
+    'https://i.imgur.com',
+    'https://raw.githubusercontent.com',
+  ]);
+  for (const card of storage.listCards()) {
+    for (const o of card.resourceOrigins ?? []) {
+      origins.add(o);
+    }
+  }
+  return Array.from(origins);
+}
+
+function isHtmlBeautifyRegex(replaceString: string): boolean {
+  return /<!doctype|<html|<style|<div|<script/i.test(replaceString);
+}
+
+function initCardMvuIfEmpty(card: CharacterCard, userName: string): Record<string, unknown> {
+  const books = card.embeddedLorebook ? [card.embeddedLorebook] : [];
+  return extractInitVarFromLorebooks(books, userName) ?? {};
+}
+
 function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
   const config = storage.getConfig();
   const cards = storage.listCards();
@@ -59,6 +83,10 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
       avatarDataUrl: opts?.omitAvatars ? undefined : c.avatarDataUrl,
       hasEmbeddedLorebook: Boolean(c.embeddedLorebook),
       embeddedLorebookCount: c.embeddedLorebook?.entries.length ?? 0,
+      hasFrontendHtml: Boolean(
+        c.regexScripts?.some((r) => !r.disabled && isHtmlBeautifyRegex(r.replaceString)),
+      ),
+      hasHelperScripts: Boolean(c.tavernHelperScripts?.some((s) => s.enabled)),
       importedAt: c.importedAt,
     })),
     presets: presets.map((p) => ({
@@ -88,6 +116,7 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
     })),
     snapshots,
     sessionState: session.state,
+    statData: session.statData ?? {},
     latestOptions: session.latestOptions,
     storyTurns: storyTurns.slice(-50),
     dataDir: storage.rootDir,
@@ -96,17 +125,24 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
 
 const server = new McpServer({
   name: 'tavern-in-agy',
-  version: '0.5.0',
+  version: '0.6.0',
 });
 
-// UI Resource (SEP-1865 MCP App)
+// UI Resource (SEP-1865 MCP App) with dynamic image-host CSP resourceDomains
 server.resource(
   'tavern-app',
   APP_URI,
   {
     description: 'TavernInAGY interactive Roleplay console',
     mimeType: 'text/html;profile=mcp-app',
-    _meta: { ui: { prefersBorder: false } },
+    _meta: {
+      ui: {
+        prefersBorder: false,
+        csp: {
+          resourceDomains: collectDynamicResourceDomains(),
+        },
+      },
+    },
   } as Record<string, unknown>,
   async () => ({
     contents: [
@@ -137,7 +173,6 @@ server.registerTool(
     },
   },
   async () => {
-    // Keep trajectory step payload under 1 MiB; App.tsx fetches full avatars via app-only bootstrap
     const payload = buildBootstrapPayload({ omitAvatars: true });
     const activeCard = payload.cards.find((c) => c.id === payload.config.activeCardId);
     const activePreset = payload.presets.find((p) => p.id === payload.config.activePresetId);
@@ -160,7 +195,7 @@ server.registerTool(
   {
     title: 'Commit RP Turn & Refresh MVU Panel',
     description:
-      'Persist the current Roleplay narrative turn to the local JSONL story log, update live character stats (location, timeOfDay, mood, outfit, affection, inventory, goals, summary), and live-refresh the TavernInAGY side-pane MVU panel.',
+      'Persist the current Roleplay narrative turn to the local JSONL story log, automatically apply any `<update>` / `<UpdateVariable>` RFC 6902 JSON Patch MVU updates to `stat_data`, update live character stats, and live-refresh the TavernInAGY side-pane.',
     inputSchema: {
       conversationId: z.string().optional(),
       userMessage: z.string().optional(),
@@ -209,6 +244,10 @@ server.registerTool(
     }
     st.updatedAt = new Date().toISOString();
 
+    // Apply generic MVU JSONPatch / _.set updates if present in narrative
+    const mvuRes = applyMvuUpdates(session.statData ?? {}, args.narrative);
+    session.statData = mvuRes.statData;
+
     const normalizedOptions = (args.options ?? []).map((o) => ({
       label: o.label,
       category: o.category ?? o.label,
@@ -222,7 +261,7 @@ server.registerTool(
     const storyKey = config.activeCardId || 'default';
     const turn = storyLog.appendTurn(storyKey, {
       userMessage: args.userMessage,
-      narrative: args.narrative,
+      narrative: mvuRes.cleanedText || args.narrative,
       thought: args.thought,
       statsSnapshot: {
         location: st.location,
@@ -231,6 +270,7 @@ server.registerTool(
         outfit: st.outfit,
         affection: st.affection,
       },
+      statData: session.statData,
       options: normalizedOptions.length > 0 ? normalizedOptions : undefined,
     });
 
@@ -239,7 +279,7 @@ server.registerTool(
       content: [
         {
           type: 'text',
-          text: `Committed turn #${turn.index} (${turn.turnId}). Live state: location="${st.location}", mood="${st.mood}", outfit="${st.outfit}", affection=${st.affection}.`,
+          text: `Committed turn #${turn.index} (${turn.turnId}). MVU patches applied: ${mvuRes.appliedCount}.`,
         },
       ],
       structuredContent: payload,
@@ -250,9 +290,9 @@ server.registerTool(
 server.registerTool(
   'tavern_get_state',
   {
-    title: 'Get Live RP State',
+    title: 'Get Live RP State & MVU stat_data',
     description:
-      'Read the active character card summary, current live RP state (location, mood, outfit, affection, inventory, goals, summary), and active preset name.',
+      'Read the active character card summary, current live RP state, MVU `stat_data`, and active preset name.',
     inputSchema: {
       conversationId: z.string().optional(),
     },
@@ -267,6 +307,7 @@ server.registerTool(
       activeCard: card ? { id: card.id, name: card.name, scenario: card.scenario } : null,
       activePreset: preset ? { id: preset.id, name: preset.name } : null,
       state: session.state,
+      statData: session.statData ?? {},
       turnCount: session.turnCount,
     };
     return {
@@ -407,7 +448,7 @@ server.registerTool(
   'tavern_app_bootstrap',
   {
     title: 'Bootstrap App Data',
-    description: 'Fetch all cards, presets, lorebooks, config, story turns, and session state for the side-pane UI.',
+    description: 'Fetch all cards, presets, lorebooks, config, MVU stat_data, story turns, and session state for the side-pane UI.',
     inputSchema: {},
     _meta: APP_ONLY_META,
   },
@@ -415,6 +456,51 @@ server.registerTool(
     content: [{ type: 'text', text: 'ok' }],
     structuredContent: buildBootstrapPayload(),
   }),
+);
+
+server.registerTool(
+  'tavern_app_get_card_frontend',
+  {
+    title: 'Get Active Card Frontend Assets',
+    description: 'Fetch the active card HTML status-bar regexes, tavern_helper scripts, and custom extensions for the side-pane TavernHelper shim.',
+    inputSchema: {
+      cardId: z.string().optional(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ cardId }) => {
+    const config = storage.getConfig();
+    const id = cardId ?? config.activeCardId;
+    const card = id ? storage.getCard(id) : null;
+    if (!card) {
+      return {
+        content: [{ type: 'text', text: 'no active card' }],
+        structuredContent: { htmlTemplates: [], helperScripts: [], customExtensions: {} },
+      };
+    }
+    const htmlTemplates = (card.regexScripts ?? [])
+      .filter((r) => !r.disabled && isHtmlBeautifyRegex(r.replaceString))
+      .map((r) => ({
+        name: r.scriptName,
+        findRegex: r.findRegex,
+        html: r.replaceString
+          .replace(/^\s*```(?:html)?\s*/i, '')
+          .replace(/\s*```\s*$/i, ''),
+      }));
+
+    const helperScripts = (card.tavernHelperScripts ?? []).filter((s) => s.enabled);
+
+    return {
+      content: [{ type: 'text', text: 'ok' }],
+      structuredContent: {
+        cardId: card.id,
+        cardName: card.name,
+        htmlTemplates,
+        helperScripts,
+        customExtensions: card.customExtensions ?? {},
+      },
+    };
+  },
 );
 
 server.registerTool(
@@ -438,7 +524,11 @@ server.registerTool(
       : parseCharacterCardJson(JSON.parse(buf.toString('utf8')), { fallbackName });
     storage.saveCard(card);
     if (setActive !== false) {
-      storage.saveConfig({ activeCardId: card.id });
+      const cfg = storage.saveConfig({ activeCardId: card.id });
+      const initVar = initCardMvuIfEmpty(card, cfg.userName || 'User');
+      const session = storage.getSession(DEFAULT_SESSION_ID);
+      session.statData = initVar;
+      storage.saveSession(session);
     }
     return {
       content: [{ type: 'text', text: `Imported card ${card.name}` }],
@@ -550,9 +640,50 @@ server.registerTool(
     _meta: APP_ONLY_META,
   },
   async (patch) => {
-    storage.saveConfig(patch);
+    const prev = storage.getConfig();
+    const next = storage.saveConfig(patch);
+    // When switching active card, initialize statData from latest turn or card [initvar]
+    if (patch.activeCardId !== undefined && patch.activeCardId !== prev.activeCardId) {
+      const session = storage.getSession(DEFAULT_SESSION_ID);
+      if (patch.activeCardId) {
+        const card = storage.getCard(patch.activeCardId);
+        const turns = storyLog.readTurns(patch.activeCardId);
+        const lastTurnWithStat = [...turns].reverse().find((t) => t.statData && Object.keys(t.statData).length > 0);
+        if (lastTurnWithStat?.statData) {
+          session.statData = lastTurnWithStat.statData;
+        } else if (card) {
+          session.statData = initCardMvuIfEmpty(card, next.userName || 'User');
+        } else {
+          session.statData = {};
+        }
+      } else {
+        session.statData = {};
+      }
+      storage.saveSession(session);
+    }
     return {
       content: [{ type: 'text', text: 'config updated' }],
+      structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'tavern_app_set_stat_data',
+  {
+    title: 'Update MVU stat_data from Side-Pane Shim',
+    description: 'Persist stat_data changes triggered by a card frontend or TavernHelper shim.',
+    inputSchema: {
+      statData: z.record(z.unknown()),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ statData }) => {
+    const session = storage.getSession(DEFAULT_SESSION_ID);
+    session.statData = statData;
+    storage.saveSession(session);
+    return {
+      content: [{ type: 'text', text: 'stat_data saved' }],
       structuredContent: buildBootstrapPayload(),
     };
   },
@@ -582,8 +713,9 @@ server.registerTool(
 server.registerTool(
   'tavern_app_rollback_turn',
   {
-    title: 'Rollback or Delete Story Turn',
-    description: 'Roll back JSONL story log to a specific turn (inclusive=true keeps it; inclusive=false deletes it for re-roll).',
+    title: 'Rollback or Delete Story Turn (with MVU stat_data restore)',
+    description:
+      'Roll back JSONL story log to a specific turn and automatically restore MVU stat_data to that exact floor.',
     inputSchema: {
       turnId: z.string(),
       inclusive: z.boolean(),
@@ -592,9 +724,22 @@ server.registerTool(
   },
   async ({ turnId, inclusive }) => {
     const config = storage.getConfig();
-    storyLog.rollbackToTurn(config.activeCardId || 'default', turnId, inclusive);
+    const cardId = config.activeCardId || 'default';
+    const kept = storyLog.rollbackToTurn(cardId, turnId, inclusive);
+
+    // Restore MVU stat_data to the exact rolled-back floor!
+    const session = storage.getSession(DEFAULT_SESSION_ID);
+    const lastKept = kept[kept.length - 1];
+    if (lastKept?.statData) {
+      session.statData = lastKept.statData;
+    } else if (config.activeCardId) {
+      const card = storage.getCard(config.activeCardId);
+      session.statData = card ? initCardMvuIfEmpty(card, config.userName || 'User') : {};
+    }
+    storage.saveSession(session);
+
     return {
-      content: [{ type: 'text', text: 'story rolled back' }],
+      content: [{ type: 'text', text: 'story and stat_data rolled back' }],
       structuredContent: buildBootstrapPayload(),
     };
   },
@@ -604,7 +749,7 @@ server.registerTool(
   'tavern_app_prepare_fork',
   {
     title: 'Prepare Branched Session Fork',
-    description: 'Stage the current edited/rolled-back JSONL story log so the next new conversation resumes seamlessly.',
+    description: 'Stage the current edited/rolled-back JSONL story log and MVU stat_data so the next new conversation resumes seamlessly.',
     inputSchema: {},
     _meta: APP_ONLY_META,
   },
@@ -617,6 +762,7 @@ server.registerTool(
       cardId,
       turns,
       state: { ...session.state },
+      statData: session.statData ?? {},
       createdAt: new Date().toISOString(),
     });
     return {

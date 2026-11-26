@@ -7,6 +7,7 @@ coverage/
 # Local runtime data & user private presets/cards
 data/
 .tavern-data/
+卡片参考/
 我即浪潮-*.json
 *.chara.png
 *.local.json

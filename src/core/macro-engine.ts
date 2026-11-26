@@ -1,9 +1,12 @@
+import { getByDotPath, stripHiddenDollarKeys } from './mvu-engine.js';
+
 export interface MacroContext {
   char: string;
   user: string;
   persona?: string;
   scenario?: string;
   vars: Record<string, string>;
+  statData?: Record<string, unknown>;
   now?: Date;
   rng?: () => number;
 }
@@ -111,6 +114,34 @@ function evaluateMacroExpression(expr: string, ctx: MacroContext): string {
     if (op === 'getvar') {
       const key = rest.trim();
       return ctx.vars[key] ?? '';
+    }
+
+    // JS-Slash-Runner scoped variable macros (strip `$` hidden keys automatically)
+    if (
+      op === 'get_message_variable' ||
+      op === 'get_chat_variable' ||
+      op === 'get_global_variable' ||
+      op === 'get_character_variable' ||
+      op === 'format_message_variable' ||
+      op === 'format_chat_variable'
+    ) {
+      const key = rest.trim();
+      let val: unknown;
+      if (key === 'stat_data') {
+        val = ctx.statData ?? {};
+      } else if (key.startsWith('stat_data.')) {
+        val = getByDotPath(ctx.statData ?? {}, key.slice('stat_data.'.length));
+      } else if (key in ctx.vars) {
+        val = ctx.vars[key];
+      } else {
+        val = getByDotPath(ctx.statData ?? {}, key);
+      }
+      if (val === undefined) return '';
+      const cleaned = stripHiddenDollarKeys(val);
+      if (typeof cleaned === 'object' && cleaned !== null) {
+        return JSON.stringify(cleaned, null, op.startsWith('format_') ? 2 : 0);
+      }
+      return String(cleaned);
     }
 
     if (op === 'addvar') {

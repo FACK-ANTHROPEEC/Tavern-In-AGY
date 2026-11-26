@@ -30,6 +30,12 @@ export interface Lorebook {
   importedAt: string;
 }
 
+export interface TavernHelperScript {
+  name: string;
+  content: string;
+  enabled: boolean;
+}
+
 export interface CharacterCard {
   id: string;
   name: string;
@@ -44,6 +50,10 @@ export interface CharacterCard {
   tags: string[];
   avatarDataUrl?: string;
   embeddedLorebook?: Lorebook;
+  regexScripts?: RegexScript[];
+  tavernHelperScripts?: TavernHelperScript[];
+  customExtensions?: Record<string, unknown>;
+  resourceOrigins?: string[];
   importedAt: string;
 }
 
@@ -108,6 +118,8 @@ export interface StoryTurn {
     outfit?: string;
     affection?: number;
   };
+  /** Per-floor MVU stat_data snapshot for exact rollback on Swipe/Re-roll */
+  statData?: Record<string, unknown>;
   options?: Array<{ label: string; category: string; text: string }>;
   createdAt: string;
 }
@@ -116,6 +128,7 @@ export interface PendingForkContext {
   cardId: string;
   turns: StoryTurn[];
   state: LiveCharacterState;
+  statData?: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -129,6 +142,8 @@ export interface SessionRuntime {
   lastPostHistoryTurn: number;
   recentMessages: string[];
   variables: Record<string, string>;
+  /** True MVU stat_data tree (initialized from [initvar] & updated via RFC 6902 JSON Patch) */
+  statData: Record<string, unknown>;
   state: LiveCharacterState;
   latestOptions: Array<{ label: string; category: string; text: string }>;
 }

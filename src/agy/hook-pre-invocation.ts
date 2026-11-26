@@ -1,5 +1,6 @@
 import { TavernStorage } from '../core/storage.js';
 import { assemblePreInvocation, hashText } from '../core/prompt-assembler.js';
+import { applyMvuUpdates } from '../core/mvu-engine.js';
 import { extractWaveOptions, readRecentTranscriptTexts } from './transcript-reader.js';
 import type { Lorebook } from '../core/types.js';
 
@@ -61,6 +62,15 @@ async function main(): Promise<void> {
   const latestOptions = extractWaveOptions(transcriptTexts);
   if (latestOptions.length > 0) {
     session.latestOptions = latestOptions;
+  }
+
+  // If the previous assistant message emitted `<update>` / `<UpdateVariable>` in plain text, apply it to MVU statData
+  const lastText = transcriptTexts[transcriptTexts.length - 1];
+  if (lastText && /<update(?:variable)?>/i.test(lastText)) {
+    const mvuRes = applyMvuUpdates(session.statData, lastText);
+    if (mvuRes.appliedCount > 0) {
+      session.statData = mvuRes.statData;
+    }
   }
 
   const nextRecent = [...session.recentMessages, lastUserInput].slice(-20);

@@ -1,6 +1,22 @@
 import crypto from 'node:crypto';
-import type { CharacterCard, Lorebook } from './types.js';
+import type { CharacterCard, Lorebook, RegexScript, TavernHelperScript } from './types.js';
 import { parseLorebookJson } from './lorebook-engine.js';
+
+function extractOriginsFromText(text: string, out: Set<string>): void {
+  const matches = text.match(/https?:\/\/[a-zA-Z0-9.-]+(?::\d+)?/g);
+  if (!matches) return;
+  for (const m of matches) {
+    if (m.includes('w3.org')) continue;
+    try {
+      const u = new URL(m);
+      if (u.protocol === 'https:' || u.protocol === 'http:') {
+        out.add(u.origin);
+      }
+    } catch {
+      // ignore invalid URL
+    }
+  }
+}
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -86,6 +102,52 @@ export function parseCharacterCardJson(
   const tagsRaw = data.tags;
   const tags = Array.isArray(tagsRaw) ? tagsRaw.map((t) => String(t)) : [];
 
+  // Generic extraction of card extensions: regex_scripts, tavern_helper.scripts, custom extensions, and image origins
+  const ext = (data.extensions && typeof data.extensions === 'object'
+    ? data.extensions
+    : {}) as Record<string, unknown>;
+
+  const origins = new Set<string>();
+  const regexScripts: RegexScript[] = [];
+  if (Array.isArray(ext.regex_scripts)) {
+    for (const rs of ext.regex_scripts as Array<Record<string, unknown>>) {
+      const replaceString = String(rs.replaceString ?? '');
+      extractOriginsFromText(replaceString, origins);
+      regexScripts.push({
+        id: typeof rs.id === 'string' ? rs.id : undefined,
+        scriptName: String(rs.scriptName ?? 'Unnamed Regex'),
+        findRegex: String(rs.findRegex ?? ''),
+        replaceString,
+        disabled: Boolean(rs.disabled),
+        placement: Array.isArray(rs.placement) ? rs.placement.map(Number) : [],
+        trimStrings: Array.isArray(rs.trimStrings) ? rs.trimStrings.map(String) : undefined,
+        markdownOnly: Boolean(rs.markdownOnly),
+        promptOnly: Boolean(rs.promptOnly),
+      });
+    }
+  }
+
+  const tavernHelperScripts: TavernHelperScript[] = [];
+  const th = ext.tavern_helper as Record<string, unknown> | undefined;
+  if (th && Array.isArray(th.scripts)) {
+    for (const s of th.scripts as Array<Record<string, unknown>>) {
+      const content = String(s.content ?? '');
+      extractOriginsFromText(content, origins);
+      tavernHelperScripts.push({
+        name: String(s.name ?? 'Unnamed Script'),
+        content,
+        enabled: s.enabled !== false,
+      });
+    }
+  }
+
+  // Preserve arbitrary non-standard extension payloads (e.g. dch_portraits, dch_maps) generically
+  const customExtensions: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(ext)) {
+    if (k === 'regex_scripts' || k === 'tavern_helper') continue;
+    customExtensions[k] = v;
+  }
+
   return {
     id: opts?.id ?? slugifyId(name),
     name,
@@ -100,6 +162,10 @@ export function parseCharacterCardJson(
     tags,
     avatarDataUrl: opts?.avatarDataUrl,
     embeddedLorebook,
+    regexScripts: regexScripts.length > 0 ? regexScripts : undefined,
+    tavernHelperScripts: tavernHelperScripts.length > 0 ? tavernHelperScripts : undefined,
+    customExtensions: Object.keys(customExtensions).length > 0 ? customExtensions : undefined,
+    resourceOrigins: origins.size > 0 ? Array.from(origins) : undefined,
     importedAt: new Date().toISOString(),
   };
 }

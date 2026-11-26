@@ -10,6 +10,8 @@ import type {
 import { evaluateMacros, type MacroContext } from './macro-engine.js';
 import { compilePreset } from './preset-parser.js';
 import { scanLorebooks } from './lorebook-engine.js';
+import { extractInitVarFromLorebooks } from './mvu-engine.js';
+import { renderEjsTemplate } from './ejs-engine.js';
 
 export function hashText(text: string): string {
   return crypto.createHash('sha1').update(text).digest('hex').slice(0, 12);
@@ -34,9 +36,11 @@ export function formatCompactState(state: LiveCharacterState, charName: string):
 export interface SessionStartBundle {
   systemMessage: string;
   variables: Record<string, string>;
+  statData: Record<string, unknown>;
   stats: {
     staticChars: number;
     constantLorebookCount: number;
+    initializedMvu: boolean;
   };
 }
 
@@ -50,13 +54,37 @@ export function assembleSessionStart(params: {
 }): SessionStartBundle {
   const { config, card, preset, lorebooks, session, resumedStoryBlock } = params;
   const allBooks = card.embeddedLorebook ? [card.embeddedLorebook, ...lorebooks] : lorebooks;
+  const userName = config.userName || 'User';
+
+  // Initialize MVU stat_data from [initvar] if session.statData is empty
+  let statData: Record<string, unknown> = { ...(session.statData ?? {}) };
+  let initializedMvu = false;
+  if (Object.keys(statData).length === 0) {
+    const initVar = extractInitVarFromLorebooks(allBooks, userName);
+    if (initVar) {
+      statData = initVar;
+      initializedMvu = true;
+    }
+  }
 
   const ctx: MacroContext = {
     char: card.name,
-    user: config.userName || 'User',
+    user: userName,
     persona: config.userPersona,
     scenario: card.scenario,
     vars: { ...session.variables },
+    statData,
+  };
+
+  const renderText = (raw: string): string => {
+    const afterEjs = renderEjsTemplate(raw, {
+      statData,
+      vars: ctx.vars,
+      card,
+      lorebooks: allBooks,
+      userName,
+    });
+    return evaluateMacros(afterEjs, ctx);
   };
 
   const scan = scanLorebooks(allBooks, {
@@ -66,17 +94,17 @@ export function assembleSessionStart(params: {
     injectedLorebookTurns: {},
   });
 
-  const wiBefore = scan.constantBefore.map((x) => x.entry.content).join('\n\n');
-  const wiAfter = scan.constantAfter.map((x) => x.entry.content).join('\n\n');
+  const wiBefore = scan.constantBefore.map((x) => renderText(x.entry.content)).filter((s) => s.trim()).join('\n\n');
+  const wiAfter = scan.constantAfter.map((x) => renderText(x.entry.content)).filter((s) => s.trim()).join('\n\n');
 
   const slots = {
     worldInfoBefore: wiBefore,
     personaDescription: config.userPersona,
-    charDescription: card.description,
-    charPersonality: card.personality,
-    scenario: card.scenario,
+    charDescription: renderText(card.description),
+    charPersonality: renderText(card.personality),
+    scenario: renderText(card.scenario),
     worldInfoAfter: wiAfter,
-    dialogueExamples: card.messageExample,
+    dialogueExamples: renderText(card.messageExample),
   };
 
   const parts: string[] = [];
@@ -84,23 +112,22 @@ export function assembleSessionStart(params: {
   if (preset) {
     const compiled = compilePreset(preset, ctx, slots);
     if (compiled.staticText) {
-      parts.push(compiled.staticText);
+      parts.push(renderText(compiled.staticText));
     }
     Object.assign(ctx.vars, compiled.variables);
   } else {
-    // Fallback assembly when no preset is selected
-    if (wiBefore) parts.push(`[World Info]\n${evaluateMacros(wiBefore, ctx)}`);
-    if (card.systemPrompt) parts.push(evaluateMacros(card.systemPrompt, ctx));
-    parts.push(`[Character: ${card.name}]\n${evaluateMacros(card.description, ctx)}`);
-    if (card.personality) parts.push(`[Personality]\n${evaluateMacros(card.personality, ctx)}`);
-    if (card.scenario) parts.push(`[Scenario]\n${evaluateMacros(card.scenario, ctx)}`);
-    if (config.userPersona) parts.push(`[User Persona: ${ctx.user}]\n${evaluateMacros(config.userPersona, ctx)}`);
-    if (wiAfter) parts.push(`[Additional World Info]\n${evaluateMacros(wiAfter, ctx)}`);
-    if (card.messageExample) parts.push(`[Dialogue Examples]\n${evaluateMacros(card.messageExample, ctx)}`);
+    if (wiBefore) parts.push(`[World Info]\n${wiBefore}`);
+    if (card.systemPrompt) parts.push(renderText(card.systemPrompt));
+    if (slots.charDescription) parts.push(`[Character: ${card.name}]\n${slots.charDescription}`);
+    if (slots.charPersonality) parts.push(`[Personality]\n${slots.charPersonality}`);
+    if (slots.scenario) parts.push(`[Scenario]\n${slots.scenario}`);
+    if (config.userPersona) parts.push(`[User Persona: ${ctx.user}]\n${renderText(config.userPersona)}`);
+    if (wiAfter) parts.push(`[Additional World Info]\n${wiAfter}`);
+    if (slots.dialogueExamples) parts.push(`[Dialogue Examples]\n${slots.dialogueExamples}`);
   }
 
   if (card.firstMessage) {
-    parts.push(`[Opening Scene Reference]\n${evaluateMacros(card.firstMessage, ctx)}`);
+    parts.push(`[Opening Scene Reference]\n${renderText(card.firstMessage)}`);
   }
 
   const compactState = formatCompactState(session.state, card.name);
@@ -117,9 +144,11 @@ export function assembleSessionStart(params: {
   return {
     systemMessage,
     variables: { ...ctx.vars },
+    statData,
     stats: {
       staticChars: systemMessage.length,
       constantLorebookCount: scan.constantBefore.length + scan.constantAfter.length,
+      initializedMvu,
     },
   };
 }
@@ -146,12 +175,27 @@ export function assemblePreInvocation(params: {
   const allBooks = card.embeddedLorebook ? [card.embeddedLorebook, ...lorebooks] : lorebooks;
   const nextTurn = session.turnCount + 1;
 
+  const statData = { ...(session.statData ?? {}) };
+  const userName = config.userName || 'User';
+
   const ctx: MacroContext = {
     char: card.name,
-    user: config.userName || 'User',
+    user: userName,
     persona: config.userPersona,
     scenario: card.scenario,
     vars: { ...session.variables },
+    statData,
+  };
+
+  const renderText = (raw: string): string => {
+    const afterEjs = renderEjsTemplate(raw, {
+      statData,
+      vars: ctx.vars,
+      card,
+      lorebooks: allBooks,
+      userName,
+    });
+    return evaluateMacros(afterEjs, ctx);
   };
 
   const parts: string[] = [];
@@ -166,7 +210,7 @@ export function assemblePreInvocation(params: {
 
   if (scan.triggered.length > 0) {
     const loreText = scan.triggered
-      .map((item) => `[Lore: ${item.entry.comment}]\n${evaluateMacros(item.entry.content, ctx)}`)
+      .map((item) => `[Lore: ${item.entry.comment}]\n${renderText(item.entry.content)}`)
       .join('\n\n');
     parts.push(`[Triggered World Info]\n${loreText}`);
   }
