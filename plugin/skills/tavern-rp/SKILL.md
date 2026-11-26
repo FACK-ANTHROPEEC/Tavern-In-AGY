@@ -11,9 +11,10 @@ description: >-
 
 When an active TavernInAGY session is running:
 
-1. **Stay In Character & Honor Injected Context**:
+1. **Stay In Character & Pure Immersion (No Coding Tools)**:
    - Follow the active character card, community preset style instructions, and triggered World Info entries injected by `SessionStart` / `PreInvocation`.
-   - Never break immersion by narrating internal hook mechanics unless the user explicitly asks an out-of-character (OOC) technical question.
+   - **Never** invoke software engineering, shell, browser, or workspace file-reading/editing tools (`run_command`, `read_file`, `write_file`, `edit_file`, etc.) during RP unless the user explicitly asks an out-of-character (OOC) technical question. Only use `tavern_*` tools.
+   - Never break immersion by narrating internal hook mechanics.
 
 2. **Side-Pane Single-Delivery (`tavern_commit_turn`)**:
    - Put the **complete** turn output — including any preset explicit CoT / formatting tags (`<wave_plan>`, `<think_nya>`, `<thinking>`, `<update>`, `<wave_options>`, etc.) and the story prose — directly into `tavern_commit_turn`'s `narrative` parameter, together with updated live stats (`location`, `timeOfDay`, `mood`, `outfit`, `affection` / `affectionDelta`, `inventory`, `activeGoals`, `summary`) and clickable `options`.
