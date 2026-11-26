@@ -1,5 +1,5 @@
 import { TavernStorage } from '../core/storage.js';
-import { assembleSessionStart } from '../core/prompt-assembler.js';
+import { assembleSessionStart, splitIntoInjectChunks } from '../core/prompt-assembler.js';
 import { StoryLogStore } from '../core/story-log.js';
 import type { Lorebook } from '../core/types.js';
 
@@ -42,16 +42,23 @@ async function main(): Promise<void> {
   const convId = payload.conversationId || 'default';
   const session = storage.getSession(convId);
   // Sync latest live state & MVU statData written by MCP server ('default' shared store)
+  let pendingDirectorInput = '';
   if (convId !== 'default') {
     const shared = storage.getSession('default');
     session.state = { ...session.state, ...shared.state };
     if (shared.statData && Object.keys(shared.statData).length > 0) {
       session.statData = { ...shared.statData };
     }
+    if (shared.pendingDirectorInput) {
+      pendingDirectorInput = shared.pendingDirectorInput;
+      shared.pendingDirectorInput = undefined;
+      storage.saveSession(shared);
+    }
   }
 
   // Always auto-resume existing story turns for the active card (or pending fork if staged)
   let resumedStoryBlock = '';
+  const recentTurnTexts: string[] = [];
   const storyLog = new StoryLogStore(storage.rootDir);
   const activeRegexScripts = [
     ...(preset?.regexScripts ?? []),
@@ -63,25 +70,36 @@ async function main(): Promise<void> {
     if (pendingFork.statData) {
       session.statData = { ...pendingFork.statData };
     }
+    for (const t of pendingFork.turns.slice(-6)) {
+      if (t.userMessage) recentTurnTexts.push(t.userMessage);
+      if (t.narrative) recentTurnTexts.push(t.narrative);
+    }
+    resumedStoryBlock = storyLog.formatForForkResume(
+      pendingFork.turns,
+      card.name,
+      config.userName || 'User',
+      30,
+      activeRegexScripts,
+    );
+  } else {
+    const existingTurns = storyLog.readTurns(card.id);
+    if (existingTurns.length > 0) {
+      for (const t of existingTurns.slice(-6)) {
+        if (t.userMessage) recentTurnTexts.push(t.userMessage);
+        if (t.narrative) recentTurnTexts.push(t.narrative);
+      }
       resumedStoryBlock = storyLog.formatForForkResume(
-        pendingFork.turns,
+        existingTurns,
         card.name,
         config.userName || 'User',
         30,
         activeRegexScripts,
       );
-    } else {
-      const existingTurns = storyLog.readTurns(card.id);
-      if (existingTurns.length > 0) {
-        resumedStoryBlock = storyLog.formatForForkResume(
-          existingTurns,
-          card.name,
-          config.userName || 'User',
-          30,
-          activeRegexScripts,
-        );
-      }
     }
+  }
+  if (pendingDirectorInput) {
+    recentTurnTexts.push(pendingDirectorInput);
+  }
 
   const bundle = assembleSessionStart({
     config,
@@ -90,6 +108,7 @@ async function main(): Promise<void> {
     lorebooks,
     session,
     resumedStoryBlock,
+    recentTurnTexts,
   });
 
   session.variables = bundle.variables;
@@ -101,20 +120,19 @@ async function main(): Promise<void> {
   }
   storage.saveSession(session);
 
-  if (!bundle.systemMessage.trim()) {
+  const chunks = splitIntoInjectChunks(bundle.systemMessage, 12000);
+  if (chunks.length === 0) {
     process.stdout.write(JSON.stringify({}));
     return;
   }
 
   process.stdout.write(
     JSON.stringify({
-      injectSteps: [
-        {
-          systemMessage: {
-            systemMessage: bundle.systemMessage,
-          },
+      injectSteps: chunks.map((chunk) => ({
+        systemMessage: {
+          systemMessage: chunk,
         },
-      ],
+      })),
     }),
   );
 }

@@ -112,6 +112,7 @@ interface TavernConfig {
   postHistoryRefreshInterval: number;
   enablePostHistoryInjection: boolean;
   statelessPerTurn?: boolean;
+  directorMode?: boolean;
 }
 
 interface BootstrapData {
@@ -318,14 +319,17 @@ export function AppView() {
       setStatusMsg('左侧尚未建立对话：请先在左侧发送第一句，再重开或刷新此面板以启用直聊。');
       return;
     }
-    const useStateless = Boolean(data?.config.statelessPerTurn);
+    const useDirector = Boolean(data?.config.directorMode);
+    const useStateless = !useDirector && Boolean(data?.config.statelessPerTurn);
     setComposerText('');
     pendingBaseTurnCountRef.current = data?.storyTurns?.length ?? 0;
     setPendingSend(text);
     setStatusMsg(
-      useStateless
-        ? '已按无状态单轮模式拉起全新上下文，等待角色落笔（完成后自动同步）...'
-        : '已发送，等待角色落笔回应（完成后将自动同步）...',
+      useDirector
+        ? '已交由导演派发全新 tavern-rp 子智能体落笔（写完自动销毁并同步）...'
+        : useStateless
+          ? '已按无状态单轮模式拉起全新上下文，等待角色落笔（完成后自动同步）...'
+          : '已发送，等待角色落笔回应（完成后将自动同步）...',
     );
     try {
       const payload = useStateless
@@ -718,9 +722,11 @@ export function AppView() {
                 className="composer-input"
                 placeholder={
                   canMessage
-                    ? data.config.statelessPerTurn
-                      ? '无状态单轮模式：每句自动新开干净上下文全量重拼…（Enter 发送）'
-                      : '在此直接输入你的行动或对话…（Enter 发送，Shift+Enter 换行）'
+                    ? data.config.directorMode
+                      ? '导演模式（请确保左侧已选 tavern-director）：每轮自动派发干净子智能体落笔…'
+                      : data.config.statelessPerTurn
+                        ? '无状态单轮模式：每句自动新开干净上下文全量重拼…（Enter 发送）'
+                        : '在此直接输入你的行动或对话…（Enter 发送，Shift+Enter 换行）'
                     : '左侧尚未建立对话：请先在左侧发送第一句，再重开本面板即可启用直聊'
                 }
                 value={composerText}
@@ -748,15 +754,16 @@ export function AppView() {
               </span>
               <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                 <button
-                  className={`btn btn-xs ${data.config.statelessPerTurn ? 'btn-primary' : ''}`}
+                  className={`btn btn-xs ${data.config.directorMode ? 'btn-primary' : ''}`}
                   onClick={() =>
                     callTool('tavern_app_update_config', {
-                      statelessPerTurn: !data.config.statelessPerTurn,
+                      directorMode: !data.config.directorMode,
+                      ...(!data.config.directorMode ? { statelessPerTurn: false } : {}),
                     })
                   }
-                  title="每轮自动新开后台会话并全量重拼预设+开场白+历史楼层（原版酒馆无状态模式）"
+                  title="单窗口导演模式（需在左侧选择 tavern-director）：每轮派发全新 tavern-rp 子智能体落笔后立即销毁，零多会话刷屏"
                 >
-                  {data.config.statelessPerTurn ? '单轮全量：开' : '单轮全量：关'}
+                  {data.config.directorMode ? '导演子体：开' : '导演子体：关'}
                 </button>
                 <button
                   className="btn btn-xs"
@@ -1282,9 +1289,30 @@ export function AppView() {
                 <strong>上下文与省额度策略（AGY 缓存优化）</strong>
                 <div className="row">
                   <div>
-                    <div>无状态单轮模式（每轮全量重构上下文）</div>
+                    <div>单窗口导演模式（推荐 · 配合左侧 <code>tavern-director</code>）</div>
                     <div className="muted">
-                      开启后每次在侧边栏发送都将新开干净后台会话，按酒馆顺序全量重拼预设+开场白+历史楼层；编楼/重Roll即时生效，但左侧历史列表会按轮新增会话。
+                      主窗口零注入、不刷屏左侧列表；每轮自动派发全新 <code>tavern-rp</code> 子智能体全量重拼上下文落笔，写完立即销毁。
+                    </div>
+                  </div>
+                  <label className="st-switch" style={{ flexShrink: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(data.config.directorMode)}
+                      onChange={(e) =>
+                        callTool('tavern_app_update_config', {
+                          directorMode: e.target.checked,
+                          ...(e.target.checked ? { statelessPerTurn: false } : {}),
+                        })
+                      }
+                    />
+                    <span className="st-slider" />
+                  </label>
+                </div>
+                <div className="row">
+                  <div>
+                    <div>无状态单轮模式（每轮新开后台会话）</div>
+                    <div className="muted">
+                      备选方案：每次发送拉起新后台对话（会新增左侧历史会话记录）。
                     </div>
                   </div>
                   <label className="st-switch" style={{ flexShrink: 0 }}>
@@ -1294,6 +1322,7 @@ export function AppView() {
                       onChange={(e) =>
                         callTool('tavern_app_update_config', {
                           statelessPerTurn: e.target.checked,
+                          ...(e.target.checked ? { directorMode: false } : {}),
                         })
                       }
                     />

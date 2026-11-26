@@ -17,6 +17,74 @@ export function hashText(text: string): string {
   return crypto.createHash('sha1').update(text).digest('hex').slice(0, 12);
 }
 
+/**
+ * Splits a large systemMessage into multiple UTF-8 byte-bounded chunks so that
+ * Antigravity's per-step hook message cap (~18-20 KB) never truncates trailing
+ * history turns, postHistoryText, or delivery instructions.
+ */
+export function splitIntoInjectChunks(text: string, maxBytes = 12000): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  if (Buffer.byteLength(trimmed, 'utf8') <= maxBytes) {
+    return [trimmed];
+  }
+
+  const chunks: string[] = [];
+  // First split by major section separators or paragraphs
+  const paragraphs = trimmed.split(/(\n\n---\n\n|\n\n)/);
+  let current = '';
+
+  const pushCurrent = () => {
+    const clean = current.trim();
+    if (clean) chunks.push(clean);
+    current = '';
+  };
+
+  const appendOversizedPiece = (piece: string) => {
+    const lines = piece.split('\n');
+    for (const line of lines) {
+      const candidate = current ? `${current}\n${line}` : line;
+      if (Buffer.byteLength(candidate, 'utf8') <= maxBytes) {
+        current = candidate;
+        continue;
+      }
+      if (current) pushCurrent();
+      if (Buffer.byteLength(line, 'utf8') <= maxBytes) {
+        current = line;
+        continue;
+      }
+      // Hard fallback: split very long single line safely along UTF-16 code points
+      let buf = '';
+      for (const ch of line) {
+        if (Buffer.byteLength(buf + ch, 'utf8') > maxBytes) {
+          if (buf.trim()) chunks.push(buf.trim());
+          buf = ch;
+        } else {
+          buf += ch;
+        }
+      }
+      current = buf;
+    }
+  };
+
+  for (const part of paragraphs) {
+    if (!part) continue;
+    const candidate = current + part;
+    if (Buffer.byteLength(candidate, 'utf8') <= maxBytes) {
+      current = candidate;
+    } else {
+      if (current.trim()) pushCurrent();
+      if (Buffer.byteLength(part, 'utf8') <= maxBytes) {
+        current = part.trimStart();
+      } else {
+        appendOversizedPiece(part.trim());
+      }
+    }
+  }
+  pushCurrent();
+  return chunks;
+}
+
 export function formatCompactState(state: LiveCharacterState, charName: string): string {
   const lines: string[] = [`[Live RP State · ${charName}]`];
   if (state.timeOfDay) lines.push(`- Time: ${state.timeOfDay}`);
@@ -51,8 +119,9 @@ export function assembleSessionStart(params: {
   lorebooks: Lorebook[];
   session: SessionRuntime;
   resumedStoryBlock?: string;
+  recentTurnTexts?: string[];
 }): SessionStartBundle {
-  const { config, card, preset, lorebooks, session, resumedStoryBlock } = params;
+  const { config, card, preset, lorebooks, session, resumedStoryBlock, recentTurnTexts } = params;
   const allBooks = card.embeddedLorebook ? [card.embeddedLorebook, ...lorebooks] : lorebooks;
   const userName = config.userName || 'User';
 
@@ -88,8 +157,8 @@ export function assembleSessionStart(params: {
   const renderText = (raw: string): string => evaluateMacros(ejsRender(raw), ctx);
 
   const scan = scanLorebooks(allBooks, {
-    recentMessages: [],
-    currentTurn: 0,
+    recentMessages: recentTurnTexts ?? [],
+    currentTurn: Math.max(1, session.turnCount + 1),
     cooldownTurns: config.cooldownTurns,
     injectedLorebookTurns: {},
   });
@@ -142,6 +211,13 @@ export function assembleSessionStart(params: {
 
   if (resumedStoryBlock && resumedStoryBlock.trim()) {
     parts.push(resumedStoryBlock.trim());
+  }
+
+  if (scan.triggered.length > 0) {
+    const triggeredLoreText = scan.triggered
+      .map((item) => `[Lore: ${item.entry.comment}]\n${renderText(item.entry.content)}`)
+      .join('\n\n');
+    parts.push(`[Triggered World Info]\n${triggeredLoreText}`);
   }
 
   const compactState = formatCompactState(session.state, card.name);

@@ -153,6 +153,8 @@ export interface SessionRuntime {
   statData: Record<string, unknown>;
   state: LiveCharacterState;
   latestOptions: Array<{ label: string; category: string; text: string }>;
+  /** Latest user input cached by PreInvocation in directorMode for the spawned subagent's SessionStart lorebook scan */
+  pendingDirectorInput?: string;
 }
 
 export interface SessionSnapshot {
@@ -179,6 +181,8 @@ export interface TavernConfig {
   enablePostHistoryInjection: boolean;
   /** When true, every side-pane send spawns a fresh background conversation with full re-assembled context */
   statelessPerTurn?: boolean;
+  /** When true (used with tavern-director agent), main window PreInvocation skips heavy injection and relays user input to spawned tavern-rp subagents */
+  directorMode?: boolean;
 }
 
 export function createDefaultState(): LiveCharacterState {
@@ -209,5 +213,6 @@ export function createDefaultConfig(): TavernConfig {
     postHistoryRefreshInterval: 0,
     enablePostHistoryInjection: true,
     statelessPerTurn: false,
+    directorMode: false,
   };
 }

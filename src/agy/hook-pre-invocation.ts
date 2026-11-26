@@ -1,5 +1,10 @@
 import { TavernStorage } from '../core/storage.js';
-import { assemblePreInvocation, assembleSessionStart, hashText } from '../core/prompt-assembler.js';
+import {
+  assemblePreInvocation,
+  assembleSessionStart,
+  hashText,
+  splitIntoInjectChunks,
+} from '../core/prompt-assembler.js';
 import { applyMvuUpdates } from '../core/mvu-engine.js';
 import { StoryLogStore } from '../core/story-log.js';
 import { extractWaveOptions, readRecentTranscriptTexts } from './transcript-reader.js';
@@ -39,6 +44,17 @@ async function main(): Promise<void> {
 
   // Skip slash commands (e.g. /tavern-rp, /compact, /plan) so invoking a skill or command never triggers RP injection
   if (/^\/[a-z0-9_-]+(?:\s|$)/i.test(lastUserInput)) {
+    process.stdout.write(JSON.stringify({}));
+    return;
+  }
+
+  // Director Mode: main window acts as a lightweight dispatcher (tavern-director) and spawns a fresh
+  // tavern-rp subagent per turn. Skip heavy injection into the main window, and cache the user input
+  // so the spawned subagent's SessionStart can scan triggered lorebooks cleanly.
+  if (config.directorMode) {
+    const shared = storage.getSession('default');
+    shared.pendingDirectorInput = lastUserInput;
+    storage.saveSession(shared);
     process.stdout.write(JSON.stringify({}));
     return;
   }
@@ -185,20 +201,19 @@ async function main(): Promise<void> {
     .filter((s) => s && s.trim().length > 0)
     .join('\n\n---\n\n');
 
-  if (!combinedMessage) {
+  const chunks = splitIntoInjectChunks(combinedMessage, 12000);
+  if (chunks.length === 0) {
     process.stdout.write(JSON.stringify({}));
     return;
   }
 
   process.stdout.write(
     JSON.stringify({
-      injectSteps: [
-        {
-          systemMessage: {
-            systemMessage: combinedMessage,
-          },
+      injectSteps: chunks.map((chunk) => ({
+        systemMessage: {
+          systemMessage: chunk,
         },
-      ],
+      })),
     }),
   );
 }

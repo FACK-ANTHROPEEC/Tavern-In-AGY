@@ -2,13 +2,12 @@
 
 ## 1. 当前状态与里程碑
 - **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agent `tavern-rp`）打造的 SillyTavern 全通用兼容 Roleplay 引擎，零反代、零凭据抽取。
-- **当前阶段**：**v0.7.1**（全生态预设与正则引擎 + 侧边栏单通道交付 + 无状态单轮全量重构模式）已完成测试、构建与安装（Git 标签 `v0.1.0`～`v0.7.1`）。
+- **当前阶段**：**v0.7.2**（单窗口子智能体导演模式 `tavern-director` + `injectSteps` 分块防截断 + 侧边栏单通道交付）已完成测试、构建与安装（Git 标签 `v0.1.0`～`v0.7.2`）。
 - **最近完成**：
-  - 侧边栏单通道交付（`tavern_commit_turn` 承载全部正文与 CoT 标签，主聊天仅留 1 行楼层索引）与瘦身 delta 载荷；
-  - 严格对齐 ST 提示词顺序（静态设定 → `#0` 开场白 → 自动续接历史楼层 → MVU 状态 → `postHistoryText` 尾注），默认 `postHistoryRefreshInterval = 0`；
-  - 新增 **无状态单轮模式（`statelessPerTurn`）**：开启后侧边栏每轮发送通过 `target: 'new'` 拉起干净后台会话并全量重拼上下文（支持最多 30 楼与深度正则压缩），同步修复首轮重复注入 `postHistoryText`、空白欢迎页直聊提示与权限动态刷新；
-  - 零脚本原生 `<details><summary>` 折叠思维链/规划标签、2.5s 自动轮询同步新楼层、角色卡内嵌世界书完整展开与独立开关。
-- **验证状态**：`npm test` 7 套件 / 27 项测试全绿；`npm run build`（`dist/ui/index.html` `552.61 kB`）与 `npm run install:plugin` 通过。
+  - 新增 **单窗口导演模式（`tavern-director` + `directorMode`）**：主窗口每轮零注入、不新增左侧历史会话，自动派发全新 `tavern-rp` 子智能体全量重拼上下文落笔并写完即毁；`PreInvocation` 在导演模式下仅缓存用户输入供子智能体 `SessionStart` 扫描动态世界书；
+  - 新增 **Hook `injectSteps` 分块防截断**（`splitIntoInjectChunks`, ≤12 KB/块），彻底解决 Antigravity 单条 `systemMessage` ~20 KB 截断导致后置指令与交付规则丢失的问题；
+  - 保留备选 **无状态单轮模式（`statelessPerTurn`）**、零脚本原生 `<details><summary>` 折叠 CoT、2.5s 自动轮询同步与角色卡内嵌世界书独立开关。
+- **验证状态**：`npm test` 7 套件 / 28 项测试全绿；`npm run build`（`dist/ui/index.html` `553.59 kB`）与 `npm run install:plugin` 通过。
 
 ## 2. 架构约束与关键契约
 - **目录与分层红线**：

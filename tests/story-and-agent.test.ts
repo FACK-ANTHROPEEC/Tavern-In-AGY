@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, afterEach } from 'vitest';
 import { StoryLogStore } from '../src/core/story-log.js';
+import { splitIntoInjectChunks } from '../src/core/prompt-assembler.js';
 
 const tmpDirs: string[] = [];
 
@@ -58,12 +59,33 @@ describe('StoryLogStore (JSONL story log & rollback)', () => {
   });
 });
 
-describe('Built-in tavern-rp Custom Agent manifest', () => {
+describe('Built-in tavern-rp & tavern-director Custom Agent manifests', () => {
   it('exists with valid frontmatter and tavern_commit_turn guidance', () => {
     const agentPath = path.resolve(process.cwd(), 'plugin', 'agents', 'tavern-rp.md');
     expect(fs.existsSync(agentPath)).toBe(true);
     const md = fs.readFileSync(agentPath, 'utf8');
     expect(md).toContain('name: tavern-rp');
     expect(md).toContain('tavern_commit_turn');
+
+    const directorPath = path.resolve(process.cwd(), 'plugin', 'agents', 'tavern-director.md');
+    expect(fs.existsSync(directorPath)).toBe(true);
+    const directorMd = fs.readFileSync(directorPath, 'utf8');
+    expect(directorMd).toContain('name: tavern-director');
+    expect(directorMd).toContain('invoke_subagent');
+    expect(directorMd).toContain('manage_subagents');
+  });
+
+  it('splits oversized system messages into UTF-8 byte-bounded injectSteps chunks without data loss', () => {
+    const sectionA = '这是一段中文测试设定。\n'.repeat(400); // ~13.2 KB
+    const sectionB = '这是第二段开场白与历史正文。\n'.repeat(400); // ~16.8 KB
+    const sectionC = '[TavernInAGY Delivery] End marker preserved.';
+    const combined = `${sectionA}\n\n---\n\n${sectionB}\n\n---\n\n${sectionC}`;
+
+    const chunks = splitIntoInjectChunks(combined, 12000);
+    expect(chunks.length).toBeGreaterThanOrEqual(3);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(chunk, 'utf8')).toBeLessThanOrEqual(12000);
+    }
+    expect(chunks[chunks.length - 1]).toContain('[TavernInAGY Delivery] End marker preserved.');
   });
 });

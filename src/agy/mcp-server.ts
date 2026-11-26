@@ -759,6 +759,7 @@ server.registerTool(
       postHistoryRefreshInterval: z.number().optional(),
       enablePostHistoryInjection: z.boolean().optional(),
       statelessPerTurn: z.boolean().optional(),
+      directorMode: z.boolean().optional(),
     },
     _meta: APP_ONLY_META,
   },
