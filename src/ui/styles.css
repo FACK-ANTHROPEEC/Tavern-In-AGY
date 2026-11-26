@@ -1,14 +1,23 @@
 :root {
-  --bg-1: var(--color-background-primary, #141418);
-  --bg-2: var(--color-background-secondary, #1d1e25);
-  --bg-3: var(--color-background-tertiary, #272934);
-  --fg-1: var(--color-text-primary, #eef0f6);
-  --fg-2: var(--color-text-secondary, #a2a8b8);
-  --border: var(--color-border-primary, #303342);
-  --accent: #e5a93c;
-  --accent-soft: rgba(229, 169, 60, 0.16);
-  --danger: var(--color-text-danger, #f87171);
-  --font: var(--font-sans, system-ui, -apple-system, sans-serif);
+  --ink-bg: #191714;
+  --ink-surface: #211e1a;
+  --ink-surface-2: #27241f;
+  --ink-header: #141210;
+  --ink-border: #332f28;
+  --ink-border-strong: #4a443b;
+  --ink-text: #ccc3b4;
+  --ink-text-bright: #dfd7c8;
+  --ink-text-muted: #7c7467;
+  --ink-text-dim: #5e584e;
+  --ink-quote-bar: #585044;
+  --ink-quote-text: #a59b8b;
+  --ink-toggle-on: #6b6153;
+  --ink-toggle-knob: #1a1815;
+  --ink-toggle-off-border: #6b6356;
+  --ink-accent: #b8a383;
+  --ink-accent-soft: rgba(184, 163, 131, 0.14);
+  --ink-danger: #a8554e;
+  --font-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", "FangSong", Georgia, serif;
 }
 
 * {
@@ -18,29 +27,37 @@
 body {
   margin: 0;
   padding: 0;
-  background: var(--bg-1);
-  color: var(--fg-1);
-  font-family: var(--font);
-  font-size: 13px;
-  line-height: 1.45;
+  background-color: var(--ink-bg);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent 27px,
+    rgba(235, 224, 204, 0.03) 28px
+  );
+  color: var(--ink-text);
+  font-family: var(--font-serif);
+  font-size: 13.5px;
+  line-height: 1.65;
+  letter-spacing: 0.02em;
+  -webkit-font-smoothing: antialiased;
 }
 
 .app-shell {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  padding: 12px;
-  gap: 10px;
+  padding: 10px;
+  gap: 8px;
 }
 
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--ink-header);
+  border: 1px solid var(--ink-border);
+  border-radius: 3px;
 }
 
 .header-title {
@@ -49,46 +66,58 @@ body {
   gap: 8px;
   font-weight: 600;
   font-size: 14px;
+  color: var(--ink-text-bright);
+  letter-spacing: 0.05em;
 }
 
 .badge {
   font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: var(--ink-accent-soft);
+  color: var(--ink-accent);
+  border: 1px solid rgba(184, 163, 131, 0.25);
   font-weight: 500;
 }
 
 .tabs {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 5px;
+  gap: 4px;
+  background: var(--ink-header);
+  padding: 4px;
+  border: 1px solid var(--ink-border);
+  border-radius: 3px;
 }
 
 .tab-btn {
-  padding: 7px 6px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-2);
-  color: var(--fg-2);
+  padding: 6px 4px;
+  border-radius: 2px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-text-muted);
   cursor: pointer;
+  font-family: var(--font-serif);
   font-size: 12px;
-  font-weight: 500;
   transition: all 0.15s ease;
 }
 
+.tab-btn:hover {
+  color: var(--ink-text);
+  background: rgba(255, 245, 225, 0.03);
+}
+
 .tab-btn.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-color: var(--accent);
+  background: var(--ink-surface-2);
+  color: var(--ink-text-bright);
+  border-color: var(--ink-border-strong);
 }
 
 .card-box {
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 12px;
+  background: rgba(33, 30, 26, 0.9);
+  border: 1px solid var(--ink-border);
+  border-radius: 3px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -102,107 +131,275 @@ body {
 }
 
 .btn {
-  padding: 6px 10px;
-  border-radius: 7px;
-  border: 1px solid var(--border);
-  background: var(--bg-3);
-  color: var(--fg-1);
+  padding: 4px 9px;
+  border-radius: 2px;
+  border: 1px solid var(--ink-border-strong);
+  background: var(--ink-surface-2);
+  color: var(--ink-text);
   cursor: pointer;
+  font-family: var(--font-serif);
   font-size: 12px;
+  transition: border-color 0.15s ease, color 0.15s ease;
 }
 
 .btn:hover {
-  border-color: var(--accent);
+  border-color: var(--ink-accent);
+  color: var(--ink-text-bright);
 }
 
 .btn-primary {
-  background: var(--accent);
-  color: #161412;
-  border-color: var(--accent);
-  font-weight: 600;
+  background: var(--ink-toggle-on);
+  color: var(--ink-text-bright);
+  border-color: var(--ink-accent);
+}
+
+.btn-primary:hover {
+  background: #7c7161;
 }
 
 .btn-danger {
-  color: var(--danger);
+  color: #c87a73;
+  border-color: rgba(168, 85, 78, 0.4);
+}
+
+.btn-danger:hover {
+  border-color: #c87a73;
+  color: #e6a39c;
 }
 
 .input,
 .textarea {
   width: 100%;
-  background: var(--bg-1);
-  color: var(--fg-1);
-  border: 1px solid var(--border);
-  border-radius: 7px;
+  background: var(--ink-header);
+  color: var(--ink-text-bright);
+  border: 1px solid var(--ink-border);
+  border-radius: 2px;
   padding: 6px 8px;
-  font-family: inherit;
-  font-size: 12px;
+  font-family: var(--font-serif);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.input:focus,
+.textarea:focus {
+  outline: none;
+  border-color: var(--ink-accent);
 }
 
 .textarea {
-  min-height: 60px;
+  min-height: 68px;
   resize: vertical;
 }
 
 .avatar {
   width: 44px;
   height: 44px;
-  border-radius: 8px;
+  border-radius: 2px;
   object-fit: cover;
-  border: 1px solid var(--border);
+  border: 1px solid var(--ink-border-strong);
   flex-shrink: 0;
 }
 
 .muted {
-  color: var(--fg-2);
-  font-size: 11px;
+  color: var(--ink-text-muted);
+  font-size: 11.5px;
 }
 
+/* --- SillyTavern Warm Ink Prompt List (Screenshot 2 style) --- */
 .section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 8px;
-  border-radius: 7px;
-  background: var(--bg-3);
+  padding: 7px 10px;
+  border: 1px solid var(--ink-border);
+  border-radius: 2px;
+  background: var(--ink-surface-2);
+  color: var(--ink-text-bright);
   cursor: pointer;
-  font-weight: 600;
-  font-size: 12px;
+  font-size: 13px;
   user-select: none;
 }
 
-.prompt-item {
+.section-header:hover {
+  border-color: var(--ink-border-strong);
+}
+
+.st-prompt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.st-prompt-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--border);
+  padding: 7px 10px;
+  background: var(--ink-surface);
+  border: 1px solid var(--ink-border);
+  border-radius: 2px;
+  transition: border-color 0.15s ease;
 }
 
-.prompt-item:last-child {
-  border-bottom: none;
+.st-prompt-row:hover {
+  border-color: var(--ink-border-strong);
+}
+
+.st-prompt-row.disabled .st-prompt-name {
+  color: var(--ink-text-dim);
+}
+
+.st-prompt-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.st-star {
+  color: var(--ink-text-muted);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.st-prompt-name {
+  color: var(--ink-text-bright);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.st-prompt-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.st-token-num {
+  min-width: 28px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--ink-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Classic Warm-Brown Capsule Toggle Switch */
+.st-switch {
+  position: relative;
+  display: inline-block;
+  width: 30px;
+  height: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.st-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.st-slider {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: transparent;
+  border: 1.5px solid var(--ink-toggle-off-border);
+  transition: all 0.18s ease;
+}
+
+.st-slider::before {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: var(--ink-toggle-off-border);
+  transition: all 0.18s ease;
+}
+
+.st-switch input:checked + .st-slider {
+  background: var(--ink-toggle-on);
+  border-color: var(--ink-toggle-on);
+}
+
+.st-switch input:checked + .st-slider::before {
+  left: 16px;
+  background: var(--ink-toggle-knob);
+}
+
+/* --- Story Reading Typography (Screenshot 1 style) --- */
+.story-paper {
+  background-color: var(--ink-bg);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent 27px,
+    rgba(235, 224, 204, 0.035) 28px
+  );
+  border: 1px solid var(--ink-border);
+  border-radius: 2px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.story-prose {
+  font-family: var(--font-serif);
+  font-size: 14px;
+  line-height: 1.9;
+  color: var(--ink-text-bright);
+  letter-spacing: 0.03em;
+}
+
+.story-prose p {
+  margin: 0 0 0.9em 0;
+}
+
+.story-prose p:last-child {
+  margin-bottom: 0;
+}
+
+.story-quote {
+  margin: 0.7em 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--ink-quote-bar);
+  color: var(--ink-quote-text);
+  font-size: 13.5px;
+  line-height: 1.85;
 }
 
 .option-btn {
   text-align: left;
   width: 100%;
   padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-3);
-  color: var(--fg-1);
+  border-radius: 2px;
+  border: 1px solid var(--ink-border);
+  background: var(--ink-surface);
+  color: var(--ink-text-bright);
   cursor: pointer;
+  font-family: var(--font-serif);
 }
 
 .option-btn:hover {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--ink-accent);
+  background: var(--ink-surface-2);
 }
 
 .status-banner {
   padding: 6px 10px;
-  border-radius: 7px;
-  background: var(--bg-3);
-  color: var(--fg-2);
-  font-size: 11px;
+  border-radius: 2px;
+  background: var(--ink-header);
+  border: 1px solid var(--ink-border);
+  color: var(--ink-text-muted);
+  font-size: 11.5px;
 }

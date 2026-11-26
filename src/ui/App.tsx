@@ -1,9 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  App,
-  applyDocumentTheme,
-  applyHostStyleVariables,
-} from '@modelcontextprotocol/ext-apps';
+import { App } from '@modelcontextprotocol/ext-apps';
 
 interface CardSummary {
   id: string;
@@ -111,6 +107,33 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
+function renderStoryNarrative(narrative: string) {
+  const paragraphs = narrative
+    .split(/\n+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  return (
+    <div className="story-prose">
+      {paragraphs.map((p, i) => {
+        const isDialogue =
+          (p.startsWith('「') && p.endsWith('」')) ||
+          (p.startsWith('『') && p.endsWith('』')) ||
+          (p.startsWith('“') && p.endsWith('”')) ||
+          p.startsWith('>');
+        if (isDialogue) {
+          return (
+            <blockquote key={i} className="story-quote">
+              {p.replace(/^>\s*/, '')}
+            </blockquote>
+          );
+        }
+        return <p key={i}>{p}</p>;
+      })}
+    </div>
+  );
+}
+
 export function AppView() {
   const appRef = useRef<App | null>(null);
   const [data, setData] = useState<BootstrapData | null>(null);
@@ -141,17 +164,9 @@ export function AppView() {
       }
     };
 
-    app.onhostcontextchanged = (ctx) => {
-      if (ctx.theme) applyDocumentTheme(ctx.theme);
-      if (ctx.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
-    };
-
     app
       .connect()
       .then(async () => {
-        const ctx = app.getHostContext();
-        if (ctx?.theme) applyDocumentTheme(ctx.theme);
-        if (ctx?.styles?.variables) applyHostStyleVariables(ctx.styles.variables);
         const caps = app.getHostCapabilities();
         setCanMessage(Boolean(caps && 'message' in caps));
         await callTool('tavern_app_bootstrap', {});
@@ -447,30 +462,41 @@ export function AppView() {
                       </span>
                     </div>
                     {!collapsed && (
-                      <div className="card-box" style={{ padding: '4px 8px', background: 'var(--bg-1)' }}>
-                        {sec.items.map((item) => (
-                          <label key={item.identifier} className="prompt-item">
-                            <div>
-                              <div>
-                                {item.name} {item.marker ? <span className="badge">插槽</span> : null}
+                      <div className="st-prompt-list">
+                        {sec.items.map((item) => {
+                          const estTokens = item.charLength > 0 ? Math.max(1, Math.round(item.charLength / 2.5)) : 0;
+                          return (
+                            <div
+                              key={item.identifier}
+                              className={`st-prompt-row ${item.enabled ? '' : 'disabled'}`}
+                            >
+                              <div className="st-prompt-left">
+                                <span className="st-star">{item.marker ? '▤' : '✳'}</span>
+                                <span className="st-prompt-name" title={item.identifier}>
+                                  {item.name}
+                                </span>
+                                {item.marker ? <span className="badge">插槽</span> : null}
                               </div>
-                              <div className="muted">
-                                {item.identifier} · {item.charLength} 字
+                              <div className="st-prompt-right">
+                                <label className="st-switch">
+                                  <input
+                                    type="checkbox"
+                                    checked={item.enabled}
+                                    onChange={(e) =>
+                                      callTool('tavern_app_toggle_preset_prompt', {
+                                        presetId: activePreset.id,
+                                        identifier: item.identifier,
+                                        enabled: e.target.checked,
+                                      })
+                                    }
+                                  />
+                                  <span className="st-slider" />
+                                </label>
+                                <span className="st-token-num">{estTokens > 0 ? estTokens : '-'}</span>
                               </div>
                             </div>
-                            <input
-                              type="checkbox"
-                              checked={item.enabled}
-                              onChange={(e) =>
-                                callTool('tavern_app_toggle_preset_prompt', {
-                                  presetId: activePreset.id,
-                                  identifier: item.identifier,
-                                  enabled: e.target.checked,
-                                })
-                              }
-                            />
-                          </label>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -512,24 +538,30 @@ export function AppView() {
           {data.lorebooks.map((book) => {
             const active = data.config.activeLorebookIds.includes(book.id);
             return (
-              <div key={book.id} className="prompt-item">
-                <div>
-                  <strong>{book.name}</strong>
-                  <div className="muted">
-                    共 {book.entryCount} 条 · 常驻 {book.constantCount} 条 · 深度 {book.scanDepth}
+              <div key={book.id} className={`st-prompt-row ${active ? '' : 'disabled'}`}>
+                <div className="st-prompt-left">
+                  <span className="st-star">📖</span>
+                  <div>
+                    <div className="st-prompt-name">{book.name}</div>
+                    <div className="muted">
+                      共 {book.entryCount} 条 · 常驻 {book.constantCount} 条 · 深度 {book.scanDepth}
+                    </div>
                   </div>
                 </div>
-                <div className="row">
-                  <input
-                    type="checkbox"
-                    checked={active}
-                    onChange={(e) => {
-                      const next = e.target.checked
-                        ? [...data.config.activeLorebookIds, book.id]
-                        : data.config.activeLorebookIds.filter((x) => x !== book.id);
-                      callTool('tavern_app_update_config', { activeLorebookIds: next });
-                    }}
-                  />
+                <div className="st-prompt-right">
+                  <label className="st-switch">
+                    <input
+                      type="checkbox"
+                      checked={active}
+                      onChange={(e) => {
+                        const next = e.target.checked
+                          ? [...data.config.activeLorebookIds, book.id]
+                          : data.config.activeLorebookIds.filter((x) => x !== book.id);
+                        callTool('tavern_app_update_config', { activeLorebookIds: next });
+                      }}
+                    />
+                    <span className="st-slider" />
+                  </label>
                   <button
                     className="btn btn-danger"
                     onClick={() => callTool('tavern_app_delete_asset', { kind: 'lorebook', id: book.id })}
@@ -610,7 +642,7 @@ export function AppView() {
           {(data.storyTurns ?? []).map((t) => {
             const isEditing = editingTurnId === t.turnId;
             return (
-              <div key={t.turnId} className="card-box" style={{ background: 'var(--bg-1)' }}>
+              <div key={t.turnId} className="story-paper">
                 <div className="row">
                   <strong>
                     #{t.index}{' '}
@@ -676,7 +708,7 @@ export function AppView() {
                     onChange={(e) => setEditingDraft(e.target.value)}
                   />
                 ) : (
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{t.narrative}</div>
+                  renderStoryNarrative(t.narrative)
                 )}
               </div>
             );
