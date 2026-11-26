@@ -108,16 +108,15 @@ export function assembleSessionStart(params: {
   };
 
   const parts: string[] = [];
+  let deferredPostHistory = '';
 
   if (preset) {
     const compiled = compilePreset(preset, ctx, slots, { ejsRender });
     if (compiled.staticText) {
       parts.push(compiled.staticText);
     }
-    // Pin post-history rules once at SessionStart so they live in the high-attention prefix
-    // and benefit from 100% KV-cache hits without being duplicated on every turn.
     if (config.enablePostHistoryInjection && compiled.postHistoryText) {
-      parts.push(compiled.postHistoryText);
+      deferredPostHistory = compiled.postHistoryText;
     }
     Object.assign(ctx.vars, compiled.variables);
   } else {
@@ -130,16 +129,19 @@ export function assembleSessionStart(params: {
     if (wiAfter) parts.push(`[Additional World Info]\n${wiAfter}`);
     if (slots.dialogueExamples) parts.push(`[Dialogue Examples]\n${slots.dialogueExamples}`);
     if (config.enablePostHistoryInjection && card.postHistoryInstructions.trim()) {
-      parts.push(renderText(card.postHistoryInstructions).trim());
+      deferredPostHistory = renderText(card.postHistoryInstructions).trim();
     }
   }
 
-  parts.push(
-    '[TavernInAGY Delivery] Put your full turn output (including any preset CoT/formatting tags and story prose) inside `tavern_commit_turn(narrative)`. Do not repeat story prose in main chat; end main chat with only a 1-line floor index (e.g., `✦ 第 #N 楼已落笔至侧边栏`).',
-  );
-
+  // Strictly place Opening Scene (#0) and existing Story History BEFORE postHistoryText (matching ST chatHistory order)
   if (card.firstMessage) {
-    parts.push(`[Opening Scene Reference]\n${renderText(card.firstMessage)}`);
+    parts.push(
+      `[Turn #0 · Opening Scene (${card.name}) — Already Shown to ${ctx.user}; Continue Directly From Here]\n${renderText(card.firstMessage)}`,
+    );
+  }
+
+  if (resumedStoryBlock && resumedStoryBlock.trim()) {
+    parts.push(resumedStoryBlock.trim());
   }
 
   const compactState = formatCompactState(session.state, card.name);
@@ -147,9 +149,14 @@ export function assembleSessionStart(params: {
     parts.push(compactState);
   }
 
-  if (resumedStoryBlock && resumedStoryBlock.trim()) {
-    parts.push(resumedStoryBlock.trim());
+  // Pin post-history rules AFTER opening scene & prior story turns so WAVE_CONTEXT_END / output_contract sit at the true end
+  if (deferredPostHistory) {
+    parts.push(deferredPostHistory);
   }
+
+  parts.push(
+    '[TavernInAGY Delivery] Put your full turn output (including any preset CoT/formatting tags and story prose) inside `tavern_commit_turn(narrative)`. Do not repeat story prose in main chat; end main chat with only a 1-line floor index (e.g., `✦ 第 #N 楼已落笔至侧边栏`).',
+  );
 
   const systemMessage = parts.filter((p) => p.trim().length > 0).join('\n\n---\n\n');
 

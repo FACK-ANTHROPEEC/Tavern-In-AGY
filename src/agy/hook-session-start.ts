@@ -42,19 +42,19 @@ async function main(): Promise<void> {
   const convId = payload.conversationId || 'default';
   const session = storage.getSession(convId);
 
-  // If the user triggered a Swipe/Edit branch fork from the side pane, consume and inject it
+  // Always auto-resume existing story turns for the active card (or pending fork if staged)
   let resumedStoryBlock = '';
+  const storyLog = new StoryLogStore(storage.rootDir);
+  const activeRegexScripts = [
+    ...(preset?.regexScripts ?? []),
+    ...(card.regexScripts ?? []),
+  ];
   const pendingFork = storage.consumePendingFork();
   if (pendingFork && pendingFork.cardId === card.id) {
     session.state = { ...session.state, ...pendingFork.state };
     if (pendingFork.statData) {
       session.statData = { ...pendingFork.statData };
     }
-    const storyLog = new StoryLogStore(storage.rootDir);
-    const activeRegexScripts = [
-      ...(preset?.regexScripts ?? []),
-      ...(card.regexScripts ?? []),
-    ];
     resumedStoryBlock = storyLog.formatForForkResume(
       pendingFork.turns,
       card.name,
@@ -62,6 +62,17 @@ async function main(): Promise<void> {
       15,
       activeRegexScripts,
     );
+  } else {
+    const existingTurns = storyLog.readTurns(card.id);
+    if (existingTurns.length > 0) {
+      resumedStoryBlock = storyLog.formatForForkResume(
+        existingTurns,
+        card.name,
+        config.userName || 'User',
+        15,
+        activeRegexScripts,
+      );
+    }
   }
 
   const bundle = assembleSessionStart({

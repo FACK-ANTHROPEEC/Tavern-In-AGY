@@ -37,6 +37,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Skip slash commands (e.g. /tavern-rp, /compact, /plan) so invoking a skill or command never triggers RP injection
+  if (/^\/[a-z0-9_-]+(?:\s|$)/i.test(lastUserInput)) {
+    process.stdout.write(JSON.stringify({}));
+    return;
+  }
+
   const card = storage.getCard(config.activeCardId);
   if (!card) {
     process.stdout.write(JSON.stringify({}));
@@ -88,17 +94,17 @@ async function main(): Promise<void> {
     session.sessionStartPresetId !== currentPresetId
   ) {
     let resumedStoryBlock = '';
+    const storyLog = new StoryLogStore(storage.rootDir);
+    const activeRegexScripts = [
+      ...(preset?.regexScripts ?? []),
+      ...(card.regexScripts ?? []),
+    ];
     const pendingFork = storage.consumePendingFork();
     if (pendingFork && pendingFork.cardId === card.id) {
       session.state = { ...session.state, ...pendingFork.state };
       if (pendingFork.statData) {
         session.statData = { ...pendingFork.statData };
       }
-      const storyLog = new StoryLogStore(storage.rootDir);
-      const activeRegexScripts = [
-        ...(preset?.regexScripts ?? []),
-        ...(card.regexScripts ?? []),
-      ];
       resumedStoryBlock = storyLog.formatForForkResume(
         pendingFork.turns,
         card.name,
@@ -106,6 +112,17 @@ async function main(): Promise<void> {
         15,
         activeRegexScripts,
       );
+    } else {
+      const existingTurns = storyLog.readTurns(card.id);
+      if (existingTurns.length > 0) {
+        resumedStoryBlock = storyLog.formatForForkResume(
+          existingTurns,
+          card.name,
+          config.userName || 'User',
+          15,
+          activeRegexScripts,
+        );
+      }
     }
 
     const startBundle = assembleSessionStart({
