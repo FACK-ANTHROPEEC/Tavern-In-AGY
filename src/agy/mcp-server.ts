@@ -233,29 +233,32 @@ server.registerTool(
     description:
       'Primary single-delivery channel for TavernInAGY RP turns. Pass the complete narrative (including any preset CoT/formatting tags like <wave_plan>, <think_nya>, <thinking>, <update>, <wave_options>) in `narrative` so the side-pane Warm Ink Serif reader renders and beautifies it directly, persists the JSONL floor, and applies MVU updates. Do not duplicate story prose in the main chat reply—reply with only a 1-line status index after calling this tool.',
     inputSchema: {
-      conversationId: z.string().optional(),
-      userMessage: z.string().optional(),
+      conversationId: z.string().nullish(),
+      userMessage: z.string().nullish(),
       narrative: z.string(),
-      thought: z.string().optional(),
-      location: z.string().optional(),
-      timeOfDay: z.string().optional(),
-      mood: z.string().optional(),
-      outfit: z.string().optional(),
-      affection: z.number().optional(),
-      affectionDelta: z.number().optional(),
-      inventory: z.array(z.string()).optional(),
-      activeGoals: z.array(z.string()).optional(),
-      summary: z.string().optional(),
-      customFields: z.record(z.string()).optional(),
+      thought: z.string().nullish(),
+      location: z.string().nullish(),
+      timeOfDay: z.string().nullish(),
+      mood: z.string().nullish(),
+      outfit: z.string().nullish(),
+      affection: z.union([z.number(), z.string()]).nullish(),
+      affectionDelta: z.union([z.number(), z.string()]).nullish(),
+      inventory: z.array(z.union([z.string(), z.number()])).nullish(),
+      activeGoals: z.array(z.union([z.string(), z.number()])).nullish(),
+      summary: z.string().nullish(),
+      customFields: z.record(z.unknown()).nullish(),
       options: z
         .array(
-          z.object({
-            label: z.string(),
-            category: z.string().optional(),
-            text: z.string(),
-          }),
+          z.union([
+            z.string(),
+            z.object({
+              label: z.string().nullish(),
+              category: z.string().nullish(),
+              text: z.string().nullish(),
+            }),
+          ]),
         )
-        .optional(),
+        .nullish(),
     },
     _meta: {
       ui: { resourceUri: APP_URI },
@@ -266,17 +269,31 @@ server.registerTool(
     const session = storage.getSession(args.conversationId || DEFAULT_SESSION_ID);
     const st = session.state;
 
-    if (args.location !== undefined) st.location = args.location;
-    if (args.timeOfDay !== undefined) st.timeOfDay = args.timeOfDay;
-    if (args.mood !== undefined) st.mood = args.mood;
-    if (args.outfit !== undefined) st.outfit = args.outfit;
-    if (args.affection !== undefined) st.affection = args.affection;
-    if (args.affectionDelta !== undefined) st.affection += args.affectionDelta;
-    if (args.inventory !== undefined) st.inventory = args.inventory;
-    if (args.activeGoals !== undefined) st.activeGoals = args.activeGoals;
-    if (args.summary !== undefined) st.summary = args.summary;
-    if (args.customFields !== undefined) {
-      st.customFields = { ...st.customFields, ...args.customFields };
+    const toNum = (v: number | string | null | undefined): number | undefined => {
+      if (v === null || v === undefined || v === '') return undefined;
+      const n = typeof v === 'number' ? v : Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
+
+    if (args.location != null) st.location = args.location;
+    if (args.timeOfDay != null) st.timeOfDay = args.timeOfDay;
+    if (args.mood != null) st.mood = args.mood;
+    if (args.outfit != null) st.outfit = args.outfit;
+    const affectionNum = toNum(args.affection);
+    if (affectionNum !== undefined) st.affection = affectionNum;
+    const deltaNum = toNum(args.affectionDelta);
+    if (deltaNum !== undefined) st.affection += deltaNum;
+    if (args.inventory != null) st.inventory = args.inventory.map(String);
+    if (args.activeGoals != null) st.activeGoals = args.activeGoals.map(String);
+    if (args.summary != null) st.summary = args.summary;
+    if (args.customFields != null) {
+      const normalizedCustom: Record<string, string> = {};
+      for (const [k, v] of Object.entries(args.customFields)) {
+        if (v !== null && v !== undefined) {
+          normalizedCustom[k] = typeof v === 'string' ? v : JSON.stringify(v);
+        }
+      }
+      st.customFields = { ...st.customFields, ...normalizedCustom };
     }
     st.updatedAt = new Date().toISOString();
 
@@ -284,11 +301,16 @@ server.registerTool(
     const mvuRes = applyMvuUpdates(session.statData ?? {}, args.narrative);
     session.statData = mvuRes.statData;
 
-    const normalizedOptions = (args.options ?? []).map((o) => ({
-      label: o.label,
-      category: o.category ?? o.label,
-      text: o.text,
-    }));
+    const normalizedOptions = (args.options ?? [])
+      .map((o, idx) => {
+        if (typeof o === 'string') {
+          return { label: `选项 ${idx + 1}`, category: '行动', text: o };
+        }
+        const text = (o.text ?? o.label ?? '').trim();
+        const label = (o.label ?? o.category ?? `选项 ${idx + 1}`).trim();
+        return { label, category: (o.category ?? label).trim(), text };
+      })
+      .filter((o) => o.text.length > 0);
     if (normalizedOptions.length > 0) {
       session.latestOptions = normalizedOptions;
     }
@@ -296,9 +318,9 @@ server.registerTool(
 
     const storyKey = config.activeCardId || 'default';
     const turn = storyLog.appendTurn(storyKey, {
-      userMessage: args.userMessage,
+      userMessage: args.userMessage ?? undefined,
       narrative: mvuRes.cleanedText || args.narrative,
-      thought: args.thought,
+      thought: args.thought ?? undefined,
       statsSnapshot: {
         location: st.location,
         timeOfDay: st.timeOfDay,
