@@ -1,0 +1,12 @@
+{
+  "name": "tavern-in-agy",
+  "displayName": "TavernInAGY",
+  "version": "0.1.0",
+  "description": "SillyTavern-compatible Roleplay engine for Antigravity with PNG/JSON character cards, World Info, community presets, and a side-pane console.",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "Open the TavernInAGY side-pane console",
+    "Check my active character card and live RP state",
+    "Save a story checkpoint snapshot for the current scene"
+  ]
+}

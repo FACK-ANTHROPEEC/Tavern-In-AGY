@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "tavern-in-agy": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/dist/agy/mcp-server.js"],
+      "env": {
+        "TAVERN_DATA_DIR": "${PLUGIN_DATA}",
+        "TAVERN_APP_HTML": "${PLUGIN_ROOT}/dist/ui/index.html"
+      }
+    }
+  }
+}
