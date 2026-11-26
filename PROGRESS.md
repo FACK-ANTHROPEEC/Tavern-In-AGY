@@ -2,8 +2,8 @@
 
 ## 1. 当前状态与里程碑
 - **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agents）打造的 SillyTavern 兼容 Roleplay 引擎，零反代、零凭据抽取，原生兼容 ST 角色卡（PNG V2/V3 & JSON）、世界书与社区预设。
-- **当前阶段**：**v0.4.0** 开发、测试、单文件构建与本地插件安装全部完成（Git 标签 `v0.1.0` / `v0.2.0` / `v0.3.0` / `v0.4.0`）。
-- **最近完成**：升级至 `v0.4.0`，新增角色卡一键导出 Custom Agent（`agents/rp-*.md`）、`tavern_commit_turn` MVU 实时状态栏刷新（含衣着 `outfit`）+ 本地 JSONL 剧情流，以及侧边栏「楼层」编辑/删楼重 Roll/一键新分支续写，并安装至 `~/.gemini/config/plugins/tavern-in-agy`。
+- **当前阶段**：**v0.4.1** 开发、测试、单文件构建与本地插件安装全部完成（Git 标签 `v0.1.0`～`v0.4.1`）。
+- **最近完成**：升级至 `v0.4.1`，内置单一常驻纯净 RP 模式 Custom Agent（`plugin/agents/tavern-rp.md`，用 `/agents` 切一次即可，换卡仍在侧边栏一键完成），配合 `tavern_commit_turn` MVU 实时状态栏 + JSONL 楼层编辑/重 Roll/分支续写，已安装至 `~/.gemini/config/plugins/tavern-in-agy`。
 - **验证状态**：`npm test` 5 套件 / 14 项测试全部通过（含 1MB 真实社区预设 `我即浪潮` 集成测试）；`npm run build` 零错误通过；插件已安装就绪，待用户在 AGY 右侧边栏实机体验反馈。
 
 ## 2. 架构约束与关键契约

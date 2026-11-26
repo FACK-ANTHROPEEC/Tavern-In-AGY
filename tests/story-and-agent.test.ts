@@ -3,8 +3,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, afterEach } from 'vitest';
 import { StoryLogStore } from '../src/core/story-log.js';
-import { exportCardToCustomAgent } from '../src/core/agent-exporter.js';
-import { createDefaultConfig, type CharacterCard } from '../src/core/types.js';
 
 const tmpDirs: string[] = [];
 
@@ -60,36 +58,12 @@ describe('StoryLogStore (JSONL story log & rollback)', () => {
   });
 });
 
-describe('exportCardToCustomAgent', () => {
-  it('exports a character card to an Antigravity Custom Agent markdown file', () => {
-    const dir = makeTmpDir();
-    const card: CharacterCard = {
-      id: 'shizi-1',
-      name: 'Shizi',
-      description: 'Devoted butler maid.',
-      personality: 'Gentle and sharp.',
-      scenario: 'Evening study.',
-      firstMessage: 'Welcome back, {{user}}.',
-      messageExample: '',
-      systemPrompt: '',
-      postHistoryInstructions: '',
-      creatorNotes: '',
-      tags: [],
-      importedAt: new Date().toISOString(),
-    };
-
-    const res = exportCardToCustomAgent({
-      card,
-      preset: null,
-      config: { ...createDefaultConfig(), userName: 'Master' },
-      agentsDir: path.join(dir, 'agents'),
-    });
-
-    expect(res.agentName).toBe('rp-shizi');
-    expect(fs.existsSync(res.filePath)).toBe(true);
-    const md = fs.readFileSync(res.filePath, 'utf8');
-    expect(md).toContain('name: rp-shizi');
-    expect(md).toContain('Welcome back, Master.');
+describe('Built-in tavern-rp Custom Agent manifest', () => {
+  it('exists with valid frontmatter and tavern_commit_turn guidance', () => {
+    const agentPath = path.resolve(process.cwd(), 'plugin', 'agents', 'tavern-rp.md');
+    expect(fs.existsSync(agentPath)).toBe(true);
+    const md = fs.readFileSync(agentPath, 'utf8');
+    expect(md).toContain('name: tavern-rp');
     expect(md).toContain('tavern_commit_turn');
   });
 });

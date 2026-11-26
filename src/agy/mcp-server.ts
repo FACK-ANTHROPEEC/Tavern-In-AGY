@@ -9,7 +9,6 @@ import { parseCharacterCardJson, parseCharacterCardPng } from '../core/card-pars
 import { parsePresetJson } from '../core/preset-parser.js';
 import { parseLorebookJson, scanLorebooks } from '../core/lorebook-engine.js';
 import { StoryLogStore } from '../core/story-log.js';
-import { exportCardToCustomAgent } from '../core/agent-exporter.js';
 import type { Lorebook } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -97,7 +96,7 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
 
 const server = new McpServer({
   name: 'tavern-in-agy',
-  version: '0.4.0',
+  version: '0.4.1',
 });
 
 // UI Resource (SEP-1865 MCP App)
@@ -444,36 +443,6 @@ server.registerTool(
     return {
       content: [{ type: 'text', text: `Imported card ${card.name}` }],
       structuredContent: buildBootstrapPayload(),
-    };
-  },
-);
-
-server.registerTool(
-  'tavern_app_export_agent',
-  {
-    title: 'Export Character Card to Custom Agent',
-    description: 'Export a character card into an Antigravity Custom Agent markdown file under agents/.',
-    inputSchema: {
-      cardId: z.string(),
-    },
-    _meta: APP_ONLY_META,
-  },
-  async ({ cardId }) => {
-    const card = storage.getCard(cardId);
-    if (!card) throw new Error(`Card not found: ${cardId}`);
-    const config = storage.getConfig();
-    const preset = config.activePresetId ? storage.getPreset(config.activePresetId) : null;
-    const agentsDir = process.env.TAVERN_PLUGIN_ROOT
-      ? path.join(process.env.TAVERN_PLUGIN_ROOT, 'agents')
-      : path.join(storage.rootDir, 'exported-agents');
-
-    const exported = exportCardToCustomAgent({ card, preset, config, agentsDir });
-    return {
-      content: [{ type: 'text', text: `Exported Custom Agent ${exported.agentName}` }],
-      structuredContent: {
-        ...buildBootstrapPayload(),
-        exportedAgent: exported,
-      },
     };
   },
 );

@@ -97,7 +97,6 @@ interface BootstrapData {
   latestOptions: WaveOption[];
   storyTurns: StoryTurnItem[];
   dataDir: string;
-  exportedAgent?: { agentName: string; filePath: string; slashHint: string };
 }
 
 type TabKey = 'cards' | 'presets' | 'lorebooks' | 'state' | 'story';
@@ -192,14 +191,6 @@ export function AppView() {
     });
     setStatusMsg(`已导入角色卡: ${file.name}`);
     e.target.value = '';
-  }
-
-  async function handleExportAgent(cardId: string) {
-    setStatusMsg('正在导出 Custom Agent...');
-    const res = await callTool('tavern_app_export_agent', { cardId });
-    if (res?.exportedAgent) {
-      setStatusMsg(`已导出 Custom Agent: ${res.exportedAgent.slashHint}`);
-    }
   }
 
   async function handlePresetUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -344,8 +335,11 @@ export function AppView() {
               <input type="file" accept=".png,.json" hidden onChange={handleCardUpload} />
             </label>
           </div>
+          <div className="muted">
+            💡 在聊天框输入 <code>/agents</code> 切换 <strong>tavern-rp</strong> 进入纯净 RP 模式，在此一键切卡即刻生效。
+          </div>
           {data.cards.length === 0 && (
-            <div className="muted">暂未导入角色卡，点击右上角导入 ST 角色卡，并可一键导出为 Custom Agent。</div>
+            <div className="muted">暂未导入角色卡，点击右上角导入原版 ST PNG/JSON 角色卡。</div>
           )}
           {data.cards.map((card) => {
             const isActive = data.config.activeCardId === card.id;
@@ -371,9 +365,6 @@ export function AppView() {
                       }
                     >
                       {isActive ? '已激活' : '启用'}
-                    </button>
-                    <button className="btn" onClick={() => handleExportAgent(card.id)} title="导出为独立 Custom Agent">
-                      导出Agent
                     </button>
                     <button
                       className="btn btn-danger"
