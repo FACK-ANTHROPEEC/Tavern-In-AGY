@@ -1,6 +1,7 @@
 import { TavernStorage } from '../core/storage.js';
-import { assemblePreInvocation, hashText } from '../core/prompt-assembler.js';
+import { assemblePreInvocation, assembleSessionStart, hashText } from '../core/prompt-assembler.js';
 import { applyMvuUpdates } from '../core/mvu-engine.js';
+import { StoryLogStore } from '../core/story-log.js';
 import { extractWaveOptions, readRecentTranscriptTexts } from './transcript-reader.js';
 import type { Lorebook } from '../core/types.js';
 
@@ -78,6 +79,50 @@ async function main(): Promise<void> {
     ? [...transcriptTexts.slice(-10), lastUserInput]
     : nextRecent;
 
+  // Fallback: if SessionStart was missed (e.g. user selected card/preset after opening the window,
+  // or switched cards mid-session), inject the full SessionStart bundle right before L2/L3!
+  const currentPresetId = preset?.id ?? '';
+  let sessionStartPrefix = '';
+  if (
+    session.sessionStartCardId !== card.id ||
+    session.sessionStartPresetId !== currentPresetId
+  ) {
+    let resumedStoryBlock = '';
+    const pendingFork = storage.consumePendingFork();
+    if (pendingFork && pendingFork.cardId === card.id) {
+      session.state = { ...session.state, ...pendingFork.state };
+      if (pendingFork.statData) {
+        session.statData = { ...pendingFork.statData };
+      }
+      const storyLog = new StoryLogStore(storage.rootDir);
+      const activeRegexScripts = [
+        ...(preset?.regexScripts ?? []),
+        ...(card.regexScripts ?? []),
+      ];
+      resumedStoryBlock = storyLog.formatForForkResume(
+        pendingFork.turns,
+        card.name,
+        config.userName || 'User',
+        15,
+        activeRegexScripts,
+      );
+    }
+
+    const startBundle = assembleSessionStart({
+      config,
+      card,
+      preset,
+      lorebooks,
+      session,
+      resumedStoryBlock,
+    });
+    session.variables = startBundle.variables;
+    session.statData = startBundle.statData;
+    session.sessionStartCardId = card.id;
+    session.sessionStartPresetId = currentPresetId;
+    sessionStartPrefix = startBundle.systemMessage;
+  }
+
   const bundle = assemblePreInvocation({
     config,
     card,
@@ -103,7 +148,11 @@ async function main(): Promise<void> {
 
   storage.saveSession(session);
 
-  if (!bundle.systemMessage.trim()) {
+  const combinedMessage = [sessionStartPrefix, bundle.systemMessage]
+    .filter((s) => s && s.trim().length > 0)
+    .join('\n\n---\n\n');
+
+  if (!combinedMessage) {
     process.stdout.write(JSON.stringify({}));
     return;
   }
@@ -113,7 +162,7 @@ async function main(): Promise<void> {
       injectSteps: [
         {
           systemMessage: {
-            systemMessage: bundle.systemMessage,
+            systemMessage: combinedMessage,
           },
         },
       ],

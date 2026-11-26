@@ -5,6 +5,15 @@ import { MvuTreeView } from './MvuTreeView';
 import { TavernFrontendHost, type CardFrontendPayload } from './TavernFrontendHost';
 import { FloorRenderer } from './FloorRenderer';
 
+interface EmbeddedLoreEntrySummary {
+  uid: string;
+  comment: string;
+  keys: string[];
+  constant: boolean;
+  enabled: boolean;
+  order: number;
+}
+
 interface CardSummary {
   id: string;
   name: string;
@@ -15,7 +24,9 @@ interface CardSummary {
   tags: string[];
   avatarDataUrl?: string;
   hasEmbeddedLorebook: boolean;
+  embeddedLorebookName?: string;
   embeddedLorebookCount: number;
+  embeddedLorebookEntries?: EmbeddedLoreEntrySummary[];
   hasFrontendHtml?: boolean;
   hasHelperScripts?: boolean;
 }
@@ -144,6 +155,7 @@ export function AppView() {
   const [cardFrontend, setCardFrontend] = useState<CardFrontendPayload | null>(null);
   const [enableRegexBeautify, setEnableRegexBeautify] = useState<boolean>(true);
   const [showPresetRegexList, setShowPresetRegexList] = useState<boolean>(false);
+  const [showEmbeddedLore, setShowEmbeddedLore] = useState<boolean>(true);
   const [editingPromptId, setEditingPromptId] = useState<string | null>(null);
   const [editingPromptContent, setEditingPromptContent] = useState<string>('');
   const [editingPromptRole, setEditingPromptRole] = useState<'system' | 'user' | 'assistant'>('system');
@@ -232,6 +244,9 @@ export function AppView() {
       const sc = res?.structuredContent as BootstrapData | undefined;
       if (sc && sc.config) {
         setData(sc);
+        if (name === 'tavern_app_bootstrap') {
+          setPendingSend(null);
+        }
       }
       return sc;
     } catch (err) {
@@ -471,17 +486,17 @@ export function AppView() {
               </div>
             )}
 
-            {activeCard && (!data.storyTurns || data.storyTurns.length === 0) && activeCard.firstMessage && (
+            {activeCard && activeCard.firstMessage && (
               <div className="story-paper">
                 <div className="row">
-                  <span className="muted">开场白 · {activeCard.name}</span>
+                  <span className="muted">#0 · 开场白 · {activeCard.name}</span>
                   <span className="badge">Opening</span>
                 </div>
                 <FloorRenderer
                   narrative={activeCard.firstMessage
                     .replace(/\{\{char\}\}/gi, activeCard.name)
                     .replace(/\{\{user\}\}/gi, data.config.userName || 'User')}
-                  depth={0}
+                  depth={data.storyTurns?.length ?? 0}
                   regexScripts={data.activeDisplayRegexScripts ?? []}
                   enableRegex={enableRegexBeautify}
                   charName={activeCard.name}
@@ -1018,7 +1033,63 @@ export function AppView() {
                   }
                 />
               </div>
-              {data.lorebooks.length === 0 && (
+              {activeCard && activeCard.hasEmbeddedLorebook && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div
+                    className="section-header"
+                    onClick={() => setShowEmbeddedLore((v) => !v)}
+                  >
+                    <span>
+                      {showEmbeddedLore ? '▾' : '▸'} 角色卡自带世界书：{activeCard.embeddedLorebookName || activeCard.name}
+                    </span>
+                    <span className="muted">
+                      {(activeCard.embeddedLorebookEntries ?? []).filter((e) => e.enabled).length}/{activeCard.embeddedLorebookCount}
+                    </span>
+                  </div>
+                  {showEmbeddedLore && (
+                    <div className="st-prompt-list">
+                      {(activeCard.embeddedLorebookEntries ?? []).map((entry) => (
+                        <div
+                          key={entry.uid}
+                          className={`st-prompt-row ${entry.enabled ? '' : 'disabled'}`}
+                        >
+                          <div className="st-prompt-left">
+                            <span className="st-star">{entry.constant ? '📌' : '🔑'}</span>
+                            <div style={{ minWidth: 0 }}>
+                              <div className="st-prompt-name" title={entry.comment}>
+                                {entry.comment || `词条 #${entry.uid}`}
+                              </div>
+                              <div className="muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {entry.constant
+                                  ? '常驻词条（开局自动注入）'
+                                  : `关键词：${entry.keys.slice(0, 4).join('、') || '无'}`}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="st-prompt-right">
+                            <label className="st-switch">
+                              <input
+                                type="checkbox"
+                                checked={entry.enabled}
+                                onChange={(e) =>
+                                  callTool('tavern_app_toggle_card_lore_entry', {
+                                    cardId: activeCard.id,
+                                    uid: entry.uid,
+                                    enabled: e.target.checked,
+                                  })
+                                }
+                              />
+                              <span className="st-slider" />
+                            </label>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {data.lorebooks.length === 0 && !activeCard?.hasEmbeddedLorebook && (
                 <div className="muted">暂未导入外部世界书（角色卡内嵌的 character_book 会自动生效）。</div>
               )}
               {data.lorebooks.map((book) => {

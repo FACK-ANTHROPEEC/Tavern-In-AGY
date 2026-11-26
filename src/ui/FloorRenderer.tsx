@@ -139,6 +139,54 @@ function InlineRegexWidget({
   );
 }
 
+function escapeHtmlText(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+const NATIVE_COT_TAGS: Array<{ tag: string; label: string }> = [
+  { tag: 'wave_plan', label: '📋 创作规划（Wave Plan）' },
+  { tag: 'think_nya', label: '💭 思维链（Think）' },
+  { tag: 'report_nya', label: '📋 思考报告' },
+  { tag: 'thinking', label: '💭 思维链（Thinking）' },
+  { tag: 'think', label: '💭 思维链（Think）' },
+  { tag: 'thought', label: '💭 思考' },
+  { tag: 'wave_summary', label: '📝 本楼记事' },
+  { tag: 'wave_review', label: '🔍 成稿回看' },
+  { tag: 'wave_comment', label: '💬 浪潮插话' },
+  { tag: 'background', label: '📜 背景剧情' },
+];
+
+/**
+ * Converts standard preset CoT / plan / summary tags directly into zero-script native
+ * `<details>` accordions so they never fail inside nested MCP App CSP sandboxes.
+ */
+function preprocessNativeTags(raw: string): string {
+  let out = raw;
+  // Unwrap <content>...</content> cleanly
+  out = out.replace(/<content>\s*([\s\S]*?)\s*<\/content>/gi, '$1');
+  // Beautify <wave_mind>...</wave_mind> as italic inner thought
+  out = out.replace(/<wave_mind>\s*([\s\S]*?)\s*<\/wave_mind>/gi, (_m, inner: string) => {
+    return `\n> *${inner.trim()}*\n`;
+  });
+  // Remove <wave_options> / <options> raw block if clickable options strip already handles it,
+  // or fold it cleanly into a native details card
+  out = out.replace(/<(?:wave_options|options)>\s*([\s\S]*?)\s*<\/(?:wave_options|options)>/gi, (_m, inner: string) => {
+    const safe = escapeHtmlText(inner.trim()).replace(/\n/g, '<br/>');
+    return `\n<details class="cot-details"><summary>🧭 备选走法</summary><div class="cot-body">${safe}</div></details>\n`;
+  });
+  for (const { tag, label } of NATIVE_COT_TAGS) {
+    const re = new RegExp(`<${tag}~?>\\s*([\\s\\S]*?)\\s*<\\/${tag}~?>`, 'gi');
+    out = out.replace(re, (_m, inner: string) => {
+      const safe = escapeHtmlText(inner.trim()).replace(/\n/g, '<br/>');
+      return `\n<details class="cot-details"><summary>${label}</summary><div class="cot-body">${safe}</div></details>\n`;
+    });
+  }
+  return out;
+}
+
 export function FloorRenderer({
   narrative,
   depth,
@@ -150,9 +198,17 @@ export function FloorRenderer({
   onSendMessage,
 }: FloorRendererProps) {
   const segments = useMemo(() => {
+    if (!enableRegex) {
+      return [{ kind: 'text' as const, content: narrative }];
+    }
+
+    // 1. Convert standard CoT / plan / summary tags to zero-script native Warm Ink accordions first
+    const withNativeFolds = preprocessNativeTags(narrative);
+
+    // 2. Run preset & card display regex scripts (e.g. prose cleanup, punctuation, custom HTML blocks)
     const processed =
-      enableRegex && regexScripts.length > 0
-        ? applyRegexScripts(narrative, regexScripts, {
+      regexScripts.length > 0
+        ? applyRegexScripts(withNativeFolds, regexScripts, {
             placement: 2,
             target: 'display',
             depth,
@@ -163,11 +219,8 @@ export function FloorRenderer({
               statData,
             },
           })
-        : narrative;
+        : withNativeFolds;
 
-    if (!enableRegex) {
-      return [{ kind: 'text' as const, content: processed }];
-    }
     return splitFloorSegments(processed);
   }, [narrative, depth, regexScripts, enableRegex, charName, userName, statData]);
 

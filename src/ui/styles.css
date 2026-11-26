@@ -522,6 +522,16 @@ body {
   user-select: none;
 }
 
+.story-html-block .cot-body {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--ink-border);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink-text-muted);
+  white-space: pre-wrap;
+}
+
 .inline-widget-wrap {
   border: 1px solid var(--ink-border);
   border-radius: 2px;

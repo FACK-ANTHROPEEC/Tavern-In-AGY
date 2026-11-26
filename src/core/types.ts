@@ -140,6 +140,9 @@ export interface SessionRuntime {
   conversationId: string;
   turnCount: number;
   lastUserInputHash: string;
+  /** Tracks which card & preset had SessionStart injected into this conversation */
+  sessionStartCardId?: string;
+  sessionStartPresetId?: string;
   /** Lorebook entry key (`${bookId}:${uid}`) -> last turn injected */
   injectedLorebookTurns: Record<string, number>;
   lastStateInjectedHash: string;

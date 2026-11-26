@@ -91,7 +91,18 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
       tags: c.tags,
       avatarDataUrl: opts?.omitAvatars ? undefined : c.avatarDataUrl,
       hasEmbeddedLorebook: Boolean(c.embeddedLorebook),
+      embeddedLorebookName: c.embeddedLorebook?.name,
       embeddedLorebookCount: c.embeddedLorebook?.entries.length ?? 0,
+      embeddedLorebookEntries: opts?.omitAvatars
+        ? undefined
+        : (c.embeddedLorebook?.entries ?? []).map((e) => ({
+            uid: e.uid,
+            comment: e.comment,
+            keys: e.keys,
+            constant: e.constant,
+            enabled: e.enabled,
+            order: e.order,
+          })),
       hasFrontendHtml: Boolean(
         c.regexScripts?.some((r) => !r.disabled && isHtmlBeautifyRegex(r.replaceString)),
       ),
@@ -103,15 +114,22 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
       name: p.name,
       regexCount: p.regexScripts.length,
       samplingMeta: p.samplingMeta,
-      prompts: p.prompts.map((item) => ({
-        identifier: item.identifier,
-        name: item.name,
-        role: item.role,
-        enabled: item.enabled,
-        marker: item.marker,
-        isSectionHeader: item.isSectionHeader,
-        charLength: item.content.length,
-      })),
+      prompts: p.prompts.map((item) => {
+        // Estimate realistic post-macro length for prompts containing huge {{random::...}} tables
+        const hasRandom = item.content.includes('{{random::');
+        const effectiveChars = hasRandom
+          ? Math.max(100, Math.round(item.content.length / 80))
+          : item.content.length;
+        return {
+          identifier: item.identifier,
+          name: item.name,
+          role: item.role,
+          enabled: item.enabled,
+          marker: item.marker,
+          isSectionHeader: item.isSectionHeader,
+          charLength: effectiveChars,
+        };
+      }),
       regexScripts: p.regexScripts.map((r, idx) => ({
         index: idx,
         scriptName: r.scriptName,
@@ -878,6 +896,33 @@ server.registerTool(
         forkReady: true,
         turnCount: turns.length,
       },
+    };
+  },
+);
+
+server.registerTool(
+  'tavern_app_toggle_card_lore_entry',
+  {
+    title: 'Toggle Embedded Card Lorebook Entry',
+    description: 'Enable or disable a single entry inside a character card embedded lorebook.',
+    inputSchema: {
+      cardId: z.string(),
+      uid: z.string(),
+      enabled: z.boolean(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ cardId, uid, enabled }) => {
+    const card = storage.getCard(cardId);
+    if (!card || !card.embeddedLorebook) throw new Error(`Embedded lorebook not found for card: ${cardId}`);
+    const entry = card.embeddedLorebook.entries.find((e) => e.uid === uid);
+    if (entry) {
+      entry.enabled = enabled;
+      storage.saveCard(card);
+    }
+    return {
+      content: [{ type: 'text', text: 'embedded lore entry toggled' }],
+      structuredContent: buildBootstrapPayload(),
     };
   },
 );

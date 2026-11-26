@@ -75,6 +75,8 @@ async function main(): Promise<void> {
 
   session.variables = bundle.variables;
   session.statData = bundle.statData;
+  session.sessionStartCardId = card.id;
+  session.sessionStartPresetId = preset?.id ?? '';
   storage.saveSession(session);
 
   if (!bundle.systemMessage.trim()) {
