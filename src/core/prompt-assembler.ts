@@ -253,6 +253,11 @@ export function assemblePreInvocation(params: {
     injectedState = true;
   }
 
+  // L3c: Single-delivery side-pane output contract (keeps main chat clean & avoids duplicate prose)
+  parts.push(
+    '[TavernInAGY Delivery] Put your full turn output (including any preset CoT/formatting tags and story prose) inside `tavern_commit_turn(narrative)`. Do not repeat story prose in main chat; end main chat with only a 1-line floor index (e.g., `✦ 第 #N 楼已落笔至侧边栏`).',
+  );
+
   return {
     systemMessage: parts.filter(Boolean).join('\n\n'),
     triggeredLorebookKeys: scan.triggered.map((x) => x.entryKey),

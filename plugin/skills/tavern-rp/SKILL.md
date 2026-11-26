@@ -15,9 +15,9 @@ When an active TavernInAGY session is running:
    - Follow the active character card, community preset style instructions, and triggered World Info entries injected by `SessionStart` / `PreInvocation`.
    - Never break immersion by narrating internal hook mechanics unless the user explicitly asks an out-of-character (OOC) technical question.
 
-2. **Commit Narrative & Sync MVU State (`tavern_commit_turn`)**:
-   - After composing a Roleplay turn (or when scene state changes), call `tavern_commit_turn` with the turn's `narrative`, updated live stats (`location`, `timeOfDay`, `mood`, `outfit`, `affection` / `affectionDelta`, `inventory`, `activeGoals`, `summary`), and any action `options`.
-   - This persists the turn into the local JSONL story log (enabling side-pane editing, rollback, and branch forking) and live-refreshes the MVU side-pane panel.
+2. **Side-Pane Single-Delivery (`tavern_commit_turn`)**:
+   - Put the **complete** turn output — including any preset explicit CoT / formatting tags (`<wave_plan>`, `<think_nya>`, `<thinking>`, `<update>`, `<wave_options>`, etc.) and the story prose — directly into `tavern_commit_turn`'s `narrative` parameter, together with updated live stats (`location`, `timeOfDay`, `mood`, `outfit`, `affection` / `affectionDelta`, `inventory`, `activeGoals`, `summary`) and clickable `options`.
+   - **Do not repeat story prose in the main chat reply.** After calling `tavern_commit_turn`, respond in main chat with only a concise 1-line turn index (e.g., `✦ 第 #N 楼已落笔至侧边栏（地点 · 情绪）`).
 
 3. **On-Demand World Info & Story Checkpoints**:
    - If you need lore details not yet in context, call `tavern_search_lorebook`.

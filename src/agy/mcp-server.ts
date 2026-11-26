@@ -215,7 +215,7 @@ server.registerTool(
   {
     title: 'Commit RP Turn & Refresh MVU Panel',
     description:
-      'Persist the current Roleplay narrative turn to the local JSONL story log, automatically apply any `<update>` / `<UpdateVariable>` RFC 6902 JSON Patch MVU updates to `stat_data`, update live character stats, and live-refresh the TavernInAGY side-pane.',
+      'Primary single-delivery channel for TavernInAGY RP turns. Pass the complete narrative (including any preset CoT/formatting tags like <wave_plan>, <think_nya>, <thinking>, <update>, <wave_options>) in `narrative` so the side-pane Warm Ink Serif reader renders and beautifies it directly, persists the JSONL floor, and applies MVU updates. Do not duplicate story prose in the main chat reply—reply with only a 1-line status index after calling this tool.',
     inputSchema: {
       conversationId: z.string().optional(),
       userMessage: z.string().optional(),
