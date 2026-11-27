@@ -141,10 +141,22 @@ export function handlePreInvocation(
       };
     }
 
+    // Prefer real user input staged from the side-pane reader (5-min TTL) so main chat only ever sees a minimal floor trigger
+    const hasFreshStagedInput =
+      Boolean(shared.stagedSidePaneInput) &&
+      Date.now() - (shared.stagedSidePaneInputAt ?? 0) <= 300_000;
+    const effectiveUserInput = hasFreshStagedInput
+      ? shared.stagedSidePaneInput!
+      : lastUserInput;
+    if (shared.stagedSidePaneInput !== undefined) {
+      shared.stagedSidePaneInput = undefined;
+      shared.stagedSidePaneInputAt = undefined;
+    }
+
     shared.directorTurnState = 'dispatched';
-    shared.pendingDirectorInput = lastUserInput;
+    shared.pendingDirectorInput = effectiveUserInput;
     shared.pendingDirectorInputAt = Date.now();
-    shared.lastUserInputForCommit = lastUserInput;
+    shared.lastUserInputForCommit = effectiveUserInput;
     session.lastUserInputHash = inputHash;
     storage.saveSession(shared);
     if (convId !== 'default') {

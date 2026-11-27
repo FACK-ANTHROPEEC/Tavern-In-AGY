@@ -106,19 +106,30 @@ describe('Director Mode multi-agent hook lifecycle', () => {
       expect(dirWakeup.injectSteps).toBeUndefined();
       expect(storage.getSession('default').directorTurnState).toBe('idle');
 
-      // 7. Next turn: user sends the exact same short message "继续" again -> MUST dispatch normally
+      // 7. Next turn: side-pane stages real user text locally and sends only a minimal floor trigger to main chat
+      const stagedSession = storage.getSession('default');
+      stagedSession.stagedSidePaneInput = '她推开殿门，轻声唤道：“主人，该起榻了。”';
+      stagedSession.stagedSidePaneInputAt = Date.now();
+      storage.saveSession(stagedSession);
+
       const dirNextTurn = handlePreInvocation(
-        { conversationId: 'director-conv', lastUserInput: '继续', invocationNum: 1 },
+        { conversationId: 'director-conv', lastUserInput: '第 #2 楼 · 开始演绎', invocationNum: 1 },
         storage,
       );
       expect(dirNextTurn.injectSteps?.length).toBe(1);
       expect(dirNextTurn.injectSteps?.[0].systemMessage.systemMessage).toContain('[Story Director · Pure Router]');
+      expect(storage.getSession('default').pendingDirectorInput).toBe('她推开殿门，轻声唤道：“主人，该起榻了。”');
+      expect(storage.getSession('default').lastUserInputForCommit).toBe('她推开殿门，轻声唤道：“主人，该起榻了。”');
+      expect(storage.getSession('default').stagedSidePaneInput).toBeUndefined();
 
       // 8. Abnormal writer exit (claimed pendingDirectorInput in SessionStart, failed before story_commit_turn) -> wakeup still resets & stops loop
-      handleSessionStart({ conversationId: 'writer-conv-2' }, storage);
+      const writerStart2 = handleSessionStart({ conversationId: 'writer-conv-2' }, storage);
+      const writer2Text = (writerStart2.injectSteps ?? []).map((s) => s.systemMessage.systemMessage).join('\n');
+      expect(writer2Text).toContain('她推开殿门，轻声唤道：“主人，该起榻了。”');
+      expect(writer2Text).not.toContain('第 #2 楼 · 开始演绎');
       expect(storage.getSession('default').pendingDirectorInput).toBeUndefined();
       const dirWakeupAfterFailure = handlePreInvocation(
-        { conversationId: 'director-conv', lastUserInput: '继续', invocationNum: 1 },
+        { conversationId: 'director-conv', lastUserInput: '第 #2 楼 · 开始演绎', invocationNum: 1 },
         storage,
       );
       expect(dirWakeupAfterFailure.injectSteps).toBeUndefined();

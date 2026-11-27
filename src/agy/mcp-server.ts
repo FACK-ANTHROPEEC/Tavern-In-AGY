@@ -1466,6 +1466,30 @@ server.registerTool(
 );
 
 server.registerTool(
+  'story_app_stage_director_input',
+  {
+    title: 'Stage Real User Input for Director Mode',
+    description:
+      'Stages the real user turn text locally so the side-pane reader can send only a minimal floor-trigger signal to the main director chat.',
+    inputSchema: {
+      text: z.string(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ text }) => {
+    const trimmed = text.trim();
+    const session = storage.getSession(DEFAULT_SESSION_ID);
+    session.stagedSidePaneInput = trimmed || undefined;
+    session.stagedSidePaneInputAt = trimmed ? Date.now() : undefined;
+    storage.saveSession(session);
+    return {
+      content: [{ type: 'text', text: 'staged' }],
+      structuredContent: { ok: true },
+    };
+  },
+);
+
+server.registerTool(
   'story_app_delete_asset',
   {
     title: 'Delete Tavern Asset',

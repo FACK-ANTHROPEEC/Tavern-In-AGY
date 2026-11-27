@@ -488,15 +488,30 @@ export function AppView() {
           : '已发送，等待角色落笔回应（完成后将自动同步）...',
     );
     try {
+      let outboundText = text;
+      if (useDirector) {
+        try {
+          const stageRes = await app.callServerTool({
+            name: 'story_app_stage_director_input',
+            arguments: { text },
+          });
+          if (!stageRes?.isError) {
+            const nextFloor = currentTurns.length + 1;
+            outboundText = `第 #${nextFloor} 楼 · 开始演绎`;
+          }
+        } catch {
+          // Fallback to sending raw text if staging fails
+        }
+      }
       const payload = useStateless
         ? ({
             role: 'user',
-            content: [{ type: 'text', text }],
+            content: [{ type: 'text', text: outboundText }],
             _meta: { 'com.google.antigravity/message': { target: 'new' } },
           } as Parameters<App['sendMessage']>[0])
         : {
             role: 'user' as const,
-            content: [{ type: 'text' as const, text }],
+            content: [{ type: 'text' as const, text: outboundText }],
           };
       await app.sendMessage(payload);
     } catch (err) {

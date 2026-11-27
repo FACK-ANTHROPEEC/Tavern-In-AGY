@@ -173,6 +173,9 @@ export interface SessionRuntime {
   /** Latest user input cached by PreInvocation in directorMode for the spawned subagent's SessionStart lorebook scan */
   pendingDirectorInput?: string;
   pendingDirectorInputAt?: number;
+  /** Real user input staged by the side-pane reader so the main chat only receives a minimal floor-trigger signal */
+  stagedSidePaneInput?: string;
+  stagedSidePaneInputAt?: number;
   /** Fallback user message captured by PreInvocation in case story_commit_turn omits userMessage */
   lastUserInputForCommit?: string;
   /** Tracks whether [Memory Summary Contract] has already been injected in this session */
