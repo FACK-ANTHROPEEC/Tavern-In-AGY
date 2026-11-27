@@ -46,7 +46,7 @@
 
 ### 前置要求
 - 已安装 **Node.js 18+**（推荐 20+）与 **Git**
-- 已安装 **Google Antigravity**
+- 已安装 **Google Antigravity**最新版本
 
 ### 3 步安装
 
