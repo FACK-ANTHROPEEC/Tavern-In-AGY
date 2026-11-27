@@ -96,6 +96,18 @@ npm run install:plugin
 
 ---
 
+## 🙏 致谢与生态参考
+
+本项目核心引擎为独立净室实现，仅兼容公开的数据格式与接口约定，特向以下社区项目与开放标准致谢：
+
+- **SillyTavern**
+- **MagVarUpdate (MVU)**
+- **ST-Prompt-Template (EJS)**
+- **JS-Slash-Runner**
+- **Model Context Protocol (MCP / MCP Apps)**
+
+---
+
 ## 📄 开源协议与商标声明
 
 本项目基于 [Apache License 2.0](./LICENSE) 开源。
