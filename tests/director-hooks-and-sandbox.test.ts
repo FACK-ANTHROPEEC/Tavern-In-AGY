@@ -68,7 +68,7 @@ describe('Director Mode multi-agent hook lifecycle', () => {
         storage,
       );
       expect(dirPre1.injectSteps?.length).toBe(1);
-      expect(dirPre1.injectSteps?.[0].systemMessage.systemMessage).toContain('[Story Director · Pure Router]');
+      expect(dirPre1.injectSteps?.[0].systemMessage.systemMessage).toContain('[Story Director · Turn Router]');
       expect(storage.getSession('default').directorTurnState).toBe('dispatched');
       expect(storage.getSession('default').pendingDirectorInput).toBe('继续');
 
@@ -83,7 +83,7 @@ describe('Director Mode multi-agent hook lifecycle', () => {
       expect(storage.getSession('writer-conv-1').isWriterSubagent).toBe(true);
       expect(storage.getSession('default').pendingDirectorInput).toBeUndefined();
 
-      // 4. [BUG 1] story-writer triggers PreInvocation -> MUST return {} and NOT inject [Story Director · Pure Router] or overwrite shared state
+      // 4. [BUG 1] story-writer triggers PreInvocation -> MUST return {} and NOT inject [Story Director · Turn Router] or overwrite shared state
       const writerPre = handlePreInvocation(
         { conversationId: 'writer-conv-1', lastUserInput: 'Write turn #1 for 继续', invocationNum: 1 },
         storage,
@@ -117,7 +117,7 @@ describe('Director Mode multi-agent hook lifecycle', () => {
         storage,
       );
       expect(dirNextTurn.injectSteps?.length).toBe(1);
-      expect(dirNextTurn.injectSteps?.[0].systemMessage.systemMessage).toContain('[Story Director · Pure Router]');
+      expect(dirNextTurn.injectSteps?.[0].systemMessage.systemMessage).toContain('[Story Director · Turn Router]');
       expect(storage.getSession('default').pendingDirectorInput).toBe('她推开殿门，轻声唤道：“主人，该起榻了。”');
       expect(storage.getSession('default').lastUserInputForCommit).toBe('她推开殿门，轻声唤道：“主人，该起榻了。”');
       expect(storage.getSession('default').stagedSidePaneInput).toBeUndefined();
