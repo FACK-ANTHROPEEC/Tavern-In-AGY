@@ -28,6 +28,20 @@ function mapPosition(pos: unknown): 'before_char' | 'after_char' | 'in_chat' {
   return 'after_char';
 }
 
+function pickOptionalBool(...values: unknown[]): boolean | undefined {
+  for (const v of values) {
+    if (typeof v === 'boolean') return v;
+  }
+  return undefined;
+}
+
+function pickPositiveNumber(...values: unknown[]): number | undefined {
+  for (const v of values) {
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
+  }
+  return undefined;
+}
+
 /**
  * Parses both standalone SillyTavern World Info JSON (`entries` object or array)
  * and Character Card V2/V3 `character_book`.
@@ -50,11 +64,26 @@ export function parseLorebookJson(
       : [];
 
   const entries: LorebookEntry[] = entryList.map((e, idx) => {
+    const ext = (e.extensions && typeof e.extensions === 'object'
+      ? e.extensions
+      : {}) as Record<string, unknown>;
     const uid = String(e.uid ?? e.id ?? idx);
     const disabled = 'disable' in e ? Boolean(e.disable) : 'enabled' in e ? !Boolean(e.enabled) : false;
-    const logicRaw = Number(e.selectiveLogic ?? 0);
+    const logicRaw = Number(
+      e.selectiveLogic ?? e.selective_logic ?? ext.selectiveLogic ?? ext.selective_logic ?? 0,
+    );
     const selectiveLogic: 0 | 1 | 2 | 3 =
       logicRaw === 1 || logicRaw === 2 || logicRaw === 3 ? logicRaw : 0;
+
+    // ST V2/V3 character_book stores numeric position/depth/recursion flags inside `entry.extensions`
+    const rawPos =
+      ext.position !== undefined && ext.position !== null ? ext.position : e.position;
+    const depth =
+      typeof e.depth === 'number'
+        ? e.depth
+        : typeof ext.depth === 'number'
+          ? ext.depth
+          : undefined;
 
     return {
       uid,
@@ -67,12 +96,33 @@ export function parseLorebookJson(
       comment: String(e.comment ?? e.name ?? `Entry ${uid}`),
       enabled: !disabled,
       order: Number(e.order ?? e.insertion_order ?? 100),
-      position: mapPosition(e.position),
-      depth: typeof e.depth === 'number' ? e.depth : undefined,
-      caseSensitive: e.caseSensitive !== undefined ? Boolean(e.caseSensitive) : undefined,
-      matchWholeWords: e.matchWholeWords !== undefined ? Boolean(e.matchWholeWords) : undefined,
-      excludeRecursion: Boolean(e.excludeRecursion),
-      preventRecursion: Boolean(e.preventRecursion),
+      position: mapPosition(rawPos),
+      depth,
+      caseSensitive: pickOptionalBool(
+        e.caseSensitive,
+        e.case_sensitive,
+        ext.case_sensitive,
+        ext.caseSensitive,
+      ),
+      matchWholeWords: pickOptionalBool(
+        e.matchWholeWords,
+        e.match_whole_words,
+        ext.match_whole_words,
+        ext.matchWholeWords,
+      ),
+      excludeRecursion: Boolean(
+        e.excludeRecursion ?? e.exclude_recursion ?? ext.exclude_recursion ?? ext.excludeRecursion,
+      ),
+      preventRecursion: Boolean(
+        e.preventRecursion ?? e.prevent_recursion ?? ext.prevent_recursion ?? ext.preventRecursion,
+      ),
+      delayUntilRecursion: Boolean(
+        e.delayUntilRecursion ??
+          e.delay_until_recursion ??
+          ext.delay_until_recursion ??
+          ext.delayUntilRecursion,
+      ),
+      scanDepth: pickPositiveNumber(e.scanDepth, e.scan_depth, ext.scan_depth, ext.scanDepth),
     };
   });
 
@@ -177,7 +227,8 @@ export function scanLorebooks(
   const skippedByCooldown: string[] = [];
 
   const maxScanDepth = Math.max(1, ...lorebooks.map((b) => b.scanDepth || 4));
-  let scanBuffer = options.recentMessages.slice(-maxScanDepth).join('\n');
+  const baseScanBuffer = options.recentMessages.slice(-maxScanDepth).join('\n');
+  let recursionBuffer = '';
 
   // Collect constants first
   for (const book of lorebooks) {
@@ -210,12 +261,19 @@ export function scanLorebooks(
 
       for (const entry of book.entries) {
         if (!entry.enabled || entry.constant || !entry.content.trim()) continue;
+        if (step === 0 && entry.delayUntilRecursion) continue;
         if (step > 0 && entry.excludeRecursion) continue;
 
         const entryKey = `${book.id}:${entry.uid}`;
         if (candidateKeys.has(entryKey)) continue;
 
-        if (matchesEntry(scanBuffer, entry)) {
+        const entryBaseBuffer =
+          entry.scanDepth && entry.scanDepth > 0
+            ? options.recentMessages.slice(-entry.scanDepth).join('\n')
+            : baseScanBuffer;
+        const haystack = step === 0 ? entryBaseBuffer : entryBaseBuffer + recursionBuffer;
+
+        if (matchesEntry(haystack, entry)) {
           candidateKeys.add(entryKey);
           candidates.push({ bookId: book.id, entryKey, entry });
           addedInStep = true;
@@ -227,7 +285,7 @@ export function scanLorebooks(
     }
 
     if (!addedInStep || !recursionAdditions) break;
-    scanBuffer += recursionAdditions;
+    recursionBuffer += recursionAdditions;
   }
 
   // Sort by ST order descending (higher order = higher priority)

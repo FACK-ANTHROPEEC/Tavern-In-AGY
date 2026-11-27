@@ -181,7 +181,8 @@ npm run install:plugin
     - **关闭的 `<details>` 内嵌 HTML 文档**：Chromium 对关闭 `<details>` 后代元素的 `innerText` 返回 `""`，`splitFloorSegments` 必须解包内嵌 `<!doctype html>...</html>` 文档，且 `memory-engine.ts` 匹配裸 `<summary>` 前必须先剥离 `<details>...</details>`；
     - **MCP 返回载荷剥离每楼 `statData`**：大卡单份 `statData` 可超 125 KB，返回给 UI 的 `storyTurns` / `committedTurn` 必须剥离楼层 `statData`（仅磁盘 JSONL 保留快照用于回滚），避免长局撞爆 1 MiB 轨迹上限；
     - **MVU 宏与 Zod 垫片**：`macro-engine.ts` 与 `ejs-engine.ts` 必须同时展开 `stat_data`/`display_data`/`delta_data`；`sandbox-shim.ts` 的 `runRegisteredSchemas` 必须 `return current;`（不得返回旧 `STAT`）；`applyMvuUpdates` 必须单遍按源码顺序执行 lodash 更新；
-    - **前端发送与 iframe 安全**：`App.tsx` 回车发送必须检查 `!e.nativeEvent.isComposing`、`onSetInput` 必须同步 `composerTextRef.current`、`MvuZodRuntimeHost` 必须校验 `cardFrontend.cardId === activeCard.id` 并记录 `bakedStatJsonRef`、三处 `onMessage` 必须校验 `evt.source === iframeRef.current?.contentWindow`。
+    - **前端发送与 iframe 安全**：`App.tsx` 回车发送必须检查 `!e.nativeEvent.isComposing`、`onSetInput` 必须同步 `composerTextRef.current`、`MvuZodRuntimeHost` 必须校验 `cardFrontend.cardId === activeCard.id` 并记录 `bakedStatJsonRef`、三处 `onMessage` 必须校验 `evt.source === iframeRef.current?.contentWindow`；
+    - **ST V2/V3 世界书 `entry.extensions` 与槽位落位**：`parseLorebookJson` 必须读取 `entry.extensions` 中的 `prevent_recursion`、`exclude_recursion`、`delay_until_recursion`、`selectiveLogic`、`position`、`depth`、`scan_depth`（不可只读顶层驼峰字段，否则会引发跨角色递归雪崩）；`prompt-assembler.ts` 将常驻蓝灯与动态绿灯统一按 `position`（`before_char` / `after_char` / `in_chat`）、`depth` 降序与 `insertion_order` 升序精确回填对应槽位。
 
 ---
 
@@ -208,4 +209,4 @@ npm run install:plugin
 - `v0.7.4`：单进程 20 KB 分块（500 KB / 18.7 万 token 实测零截断）+ 15 万上下文动态历史预算 + Apache-2.0 协议与净室独立实现声明
 - `v0.7.5`：大卡 PNG 前端解包 + 384 KB 分片上传 + 真·通用 MVU Zod v4 / 完整 `lodash-es` 后台常驻沙箱（`registerMvuSchema` 工厂函数、`Mvu.events` 双发、`getAllVariables`、`setChatMessages`）+ 多开场白翻页/直跳/初始态补丁 + `resources/read` 动态外链图床 CSP + 每层小铅笔编辑 + 10 楼分页懒加载 + 卡片/预设脚本独立开关 + iframe 折叠精准缩高与 `#send_textarea`/`#send_but` 桥接
 - `v0.8.0`：记忆插件基础版（顶部独立「记忆」Tab + 总开关 + 提示词约束每轮 ~200 字 `<memory_summary>` + 精确按楼滑动窗口仅喂最新 N 楼完整正文/更早楼层全给小总结 + 逐楼时间线编辑补写 + 正文折叠展示）与 Phase 2–4 进阶记忆/外部 API 规划
-- `v0.8.1`（当前）：`/rp` & `/rp off` 单窗口零污染隔离 + 导演无回显安全暂存路由与三层同轮防重锁 + 16 项安全加固与 18 项全链路捉虫修复（`runRegisteredSchemas`、`<details><summary>` 误劫持修复、MVU 源码顺序执行 & `display_data`/`delta_data` 展开 & 防原型链污染、未排入 `prompt_order` 默认禁用、MCP 返回载荷剥离楼层 `statData`、中文输入法防误发、三处 iframe `evt.source` 校验与切卡防串台）+ 主流图床 CSP 白名单（全量 12 套件 / 58 用例通过）
+- `v0.8.1`（当前）：`/rp` & `/rp off` 单窗口零污染隔离 + 导演无回显安全暂存路由与三层同轮防重锁 + 16 项安全加固与 18 项全链路捉虫修复（`runRegisteredSchemas`、`<details><summary>` 误劫持修复、MVU 源码顺序执行 & `display_data`/`delta_data` 展开 & 防原型链污染、未排入 `prompt_order` 默认禁用、MCP 返回载荷剥离楼层 `statData`、中文输入法防误发、三处 iframe `evt.source` 校验与切卡防串台）+ ST V2/V3 世界书 `entry.extensions` 递归防雪崩与蓝绿灯按 `position`/`depth`/`order` 精确回填槽位 + 主流图床 CSP 白名单（全量 12 套件 / 60 用例通过）

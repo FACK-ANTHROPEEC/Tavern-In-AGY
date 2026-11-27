@@ -177,8 +177,27 @@ export function assembleSessionStart(params: {
     injectedLorebookTurns: {},
   });
 
-  const rawWiBefore = scan.constantBefore.map((x) => x.entry.content).filter((s) => s.trim()).join('\n\n');
-  const rawWiAfter = scan.constantAfter.map((x) => x.entry.content).filter((s) => s.trim()).join('\n\n');
+  // Merge constant + dynamically triggered lorebook entries and route every entry
+  // to its exact SillyTavern slot (`before_char`, `after_char`, `in_chat`), sorted by
+  // ST insertion_order ascending (and depth descending for `in_chat`) so paired
+  // header/item/footer blocks (e.g. `===开始===` / item / `===结束===`) stay intact.
+  const allActiveLore = [...scan.constantBefore, ...scan.constantAfter, ...scan.triggered];
+  const beforeCharLore = allActiveLore
+    .filter((x) => x.entry.position === 'before_char')
+    .sort((a, b) => a.entry.order - b.entry.order);
+  const afterCharLore = allActiveLore
+    .filter((x) => x.entry.position === 'after_char')
+    .sort((a, b) => a.entry.order - b.entry.order);
+  const inChatLore = allActiveLore
+    .filter((x) => x.entry.position === 'in_chat')
+    .sort((a, b) => {
+      const depthDiff = (b.entry.depth ?? 0) - (a.entry.depth ?? 0);
+      return depthDiff !== 0 ? depthDiff : a.entry.order - b.entry.order;
+    });
+
+  const rawWiBefore = beforeCharLore.map((x) => x.entry.content).filter((s) => s.trim()).join('\n');
+  const rawWiAfter = afterCharLore.map((x) => x.entry.content).filter((s) => s.trim()).join('\n');
+  const rawWiInChat = inChatLore.map((x) => x.entry.content).filter((s) => s.trim()).join('\n');
 
   const rawSlots = {
     worldInfoBefore: rawWiBefore,
@@ -234,11 +253,11 @@ export function assembleSessionStart(params: {
     parts.push(resumedStoryBlock.trim());
   }
 
-  if (scan.triggered.length > 0) {
-    const triggeredLoreText = scan.triggered
-      .map((item) => `[Lore: ${item.entry.comment}]\n${renderText(item.entry.content)}`)
-      .join('\n\n');
-    parts.push(`[Triggered World Info]\n${triggeredLoreText}`);
+  if (rawWiInChat) {
+    const renderedInChat = renderText(rawWiInChat).trim();
+    if (renderedInChat) {
+      parts.push(renderedInChat);
+    }
   }
 
   const compactState = formatCompactState(session.state, card.name);

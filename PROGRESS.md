@@ -2,15 +2,18 @@
 
 ## 1. 当前状态与里程碑
 - **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agents `story-director`/`story-writer`）打造的本地互动小说与角色扮演创作引擎（Apache-2.0，零反代、零凭据抽取）。
-- **当前阶段**：**v0.8.1**（已发布 GitHub Release；删除旧 `v0.8.0`），全量 12 套件 / 58 用例全绿，本地插件与 `origin/main` 完全同步。
+- **当前阶段**：**v0.8.1**（已发布 GitHub Release；删除旧 `v0.8.0`），全量 12 套件 / 60 用例全绿，本地插件与 `origin/main` 完全同步。
 - **最近完成**：
+  - **ST V2/V3 世界书解析与槽位精确落位修复**：
+    - `lorebook-engine.ts` / `types.ts` 完整解析 `entry.extensions` 中的 `prevent_recursion`、`exclude_recursion`、`delay_until_recursion`、`selectiveLogic`、`position`、`depth`、`scan_depth` 等字段，彻底根除多角色大卡世界书递归雪崩；
+    - `prompt-assembler.ts` 将常驻蓝灯与动态触发绿灯统一按 ST `position`（`before_char` / `after_char` / `in_chat`）、`depth` 降序与 `insertion_order` 升序精确回填对应槽位并去掉 `[Lore: ...]` 外壳，完整保留作者配对嵌套块。
   - **v0.8.1 导演无回显路由 + 18 项全面捉虫修复 + MVU/状态栏通用兼容性升级**：
     - 导演无回显与防重：`story_app_stage_director_input` 仅写 `stagedSidePaneInput`，经 `hook-pre-invocation.ts` 校验 `rpModeActive` 后提升为 `pendingDirectorInput` 并叠加 `transcript.jsonl` 步号锁 + 暂存时间戳锁 + 提交冷却锁（含 OOC 与非导演模式去重、分叉 `peekPendingFork` 自动绑定）；
     - MVU & 预设 & 记忆：`mvu-engine.ts` 单遍按源码顺序执行 lodash 更新 + 防原型链污染 + 多段 `[InitVar]*` 合并；`macro-engine.ts`/`ejs-engine.ts` 补齐 `display_data`/`delta_data`；`preset-parser.ts` 修复未排入 `prompt_order` 条目误启用；`memory-engine.ts` 避免裸 `<summary>` 劫持 `<details><summary>`；`mcp-server.ts` 统一 `DEFAULT_SESSION_ID`、补扫外部激活世界书 `[initvar]`、返回载荷剥离楼层 `statData` 防撞 1 MiB 上限；
     - 前端与安全：`sandbox-shim.ts` 修复 `runRegisteredSchemas` 返回旧 `STAT`；`regex-engine.ts` 修复 `sanitizeStaticHtml` 脚本体残留与折叠标签内占位符转义；`App.tsx` 补齐中文输入法 `isComposing`、`sendingRef`、草稿恢复、弹窗失败不关窗、切卡防串台与三处 iframe `evt.source` 校验。
   - **`/rp` 快捷入口与单窗口零污染隔离**：技能重命名为 `/rp`（`plugin/skills/rp/SKILL.md`），`SessionRuntime.rpModeActive` 按 `conversationId` 隔离，普通编程窗口 100% 零注入，`/rp off` 随时退出。
   - **v0.8.0 记忆插件基础版 + 16 项高危审计修复**：独立「记忆」Tab + 滑动窗口逐楼小总结；修复导演写手隔离/防重、`</script>` 沙箱逃逸、XSS/正则/高度回环/载荷预算/并发写入等问题。
-- **验证状态**：`npm test` **12 套件 / 58 用例全绿（0 skipped）**；`npm run build` & `npm run install:plugin` 通过。
+- **验证状态**：`npm test` **12 套件 / 60 用例全绿（0 skipped）**；`npm run build` & `npm run install:plugin` 通过。
 
 ## 2. 架构约束与关键契约
 - **目录与分层红线**：

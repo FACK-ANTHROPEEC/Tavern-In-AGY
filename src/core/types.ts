@@ -16,6 +16,8 @@ export interface LorebookEntry {
   matchWholeWords?: boolean;
   excludeRecursion?: boolean;
   preventRecursion?: boolean;
+  delayUntilRecursion?: boolean;
+  scanDepth?: number;
 }
 
 export interface Lorebook {
