@@ -100,7 +100,7 @@ async function main(): Promise<void> {
       pendingFork.turns,
       card.name,
       config.userName || 'User',
-      30,
+      { maxContextTokens: 150_000 },
       activeRegexScripts,
     );
   } else {
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
         existingTurns,
         card.name,
         config.userName || 'User',
-        30,
+        { maxContextTokens: 150_000 },
         activeRegexScripts,
       );
     }
@@ -143,7 +143,7 @@ async function main(): Promise<void> {
   }
   storage.saveSession(session);
 
-  const chunks = splitIntoInjectChunks(bundle.systemMessage, 12000);
+  const chunks = splitIntoInjectChunks(bundle.systemMessage, 20480);
   if (chunks.length === 0) {
     process.stdout.write(JSON.stringify({}));
     return;

@@ -96,6 +96,8 @@ npm run install:plugin
 
 ---
 
-## 📄 开源协议
+## 📄 开源协议与商标声明
 
 本项目基于 [MIT License](./LICENSE) 开源。
+
+本项目为独立净室实现（Clean-room Implementation），仅兼容社区公开的角色卡、预设、JSON Patch 与模板数据格式规范，不包含任何第三方项目的源代码，亦与 Antigravity 或任何第三方社区项目无隶属或官方背书关系。所有第三方名称、格式规范及商标均归其各自所有者所有。

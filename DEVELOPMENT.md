@@ -64,8 +64,8 @@ TavernInAGY/
 
 ### 2.1 严格 ST 顺序拼装 + 12 KB UTF-8 分块防截断
 - **`SessionStart` 严格组装顺序**（[prompt-assembler.ts](file:///d:/GeminiWorkX/AAA1/TavernInAGY/src/core/prompt-assembler.ts)）：
-  `staticText`（预设前半段 + 角色卡 + 常驻世界书） → `Turn #0 Opening Scene` → `Resumed Story Turns`（自动续接 `stories/<cardId>.jsonl` 最多 30 楼，并对旧楼层按真实深度执行 `promptOnly` 正则压缩） → `Triggered World Info`（基于最近 6 楼与本轮输入） → `compactState` → `postHistoryText`（如 `[[WAVE_CONTEXT_END]]` / `output_contract`） → `[TavernInAGY Delivery]`。
-- **UTF-8 分块防截断**：`splitIntoInjectChunks(text, 12000)` 按 UTF-8 字节数在段落边界安全拆分成多条 `injectSteps`（每条 ≤ 12 KB），彻底解决 Antigravity 单条 `systemMessage` 在 ~18–20 KB 处触发 `<truncated>` 的问题（实测 11 块完整送达、0 字节截断）。
+  `staticText`（预设前半段 + 角色卡 + 常驻世界书） → `Turn #0 Opening Scene` → `Resumed Story Turns`（自动续接 `stories/<cardId>.jsonl`，无固定楼层数硬上限，按 15 万上下文预算从最新楼层倒序填充，并对旧楼层按真实深度执行 `promptOnly` 正则压缩） → `Triggered World Info`（基于最近 6 楼与本轮输入） → `compactState` → `postHistoryText`（如 `[[WAVE_CONTEXT_END]]` / `output_contract`） → `[TavernInAGY Delivery]`。
+- **UTF-8 分块防截断**：`splitIntoInjectChunks(text, 20480)` 按 UTF-8 字节数在段落边界安全拆分成多条 `injectSteps`（每条 ≤ 20 KB），在单次 Hook 进程 stdout 内一次性输出，彻底规避 Antigravity 单步 `systemMessage` 的 ~24 KB 截断上限（实测单次 Hook 输出 **25 块 × 20 KB = 500 KB / `187,883` input tokens**，<1 秒完整送达、0 字节截断、前缀缓存全命中）。
 - **AGY 缓存优化**：新建配置默认 `postHistoryRefreshInterval = 0`（`postHistoryText` 仅开局钉死一次，普通续聊轮次 `PreInvocation` 零冗余注入）；首轮注入后自动推进 `lastPostHistoryTurn = turnCount + 1`，防止旧配置 `interval = 1` 在第 1 轮双重注入。
 
 ### 2.2 单窗口子智能体导演模式（`story-director` + `directorMode`，默认开启）
@@ -125,8 +125,8 @@ npm run install:plugin
 
 ## 4. 关键避坑与 Antigravity 底层铁律（血泪经验）
 
-1. **单条 Hook `systemMessage` 约 18–20 KB 截断上限**：
-   - 无论主窗口还是子智能体，单条 `injectSteps` 超过 ~20 KB 会被宿主直接截断为 `<truncated N bytes>`。**永远通过 `splitIntoInjectChunks(text, 12000)` 分块输出**。
+1. **单条 Hook `systemMessage` 约 24 KB 截断上限（单脚本 stdout 总长无 24 KB 限制）**：
+   - 截断仅作用于 `injectSteps` 数组内单条元素，而非整个 Hook 的 stdout。**统一通过 `splitIntoInjectChunks(text, 20480)` 在单次进程内输出多条 20 KB 分块**（已实测 25 块 / 500 KB / 18.7 万 token 零截断、耗时 <1s）。
 2. **Subagent 钩子与工具特性**：
    - `invoke_subagent` 拉起的子智能体 **只触发 `SessionStart`，不触发 `PreInvocation`**，且可直接通过 `call_mcp_tool` 调用 MCP 工具。
    - 插件 Custom Agent 默认**不具备** `invoke_subagent` / `manage_subagents` 工具，必须像 `tavern-director.md` 一样在 frontmatter 显式声明 `tools: [invoke_subagent, manage_subagents, send_message]`。

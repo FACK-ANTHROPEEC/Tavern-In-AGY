@@ -154,7 +154,7 @@ async function main(): Promise<void> {
         pendingFork.turns,
         card.name,
         config.userName || 'User',
-        30,
+        { maxContextTokens: 150_000 },
         activeRegexScripts,
       );
     } else {
@@ -165,7 +165,7 @@ async function main(): Promise<void> {
           existingTurns,
           card.name,
           config.userName || 'User',
-          30,
+          { maxContextTokens: 150_000 },
           activeRegexScripts,
         );
       }
@@ -221,7 +221,7 @@ async function main(): Promise<void> {
     .filter((s) => s && s.trim().length > 0)
     .join('\n\n---\n\n');
 
-  const chunks = splitIntoInjectChunks(combinedMessage, 12000);
+  const chunks = splitIntoInjectChunks(combinedMessage, 20480);
   if (chunks.length === 0) {
     process.stdout.write(JSON.stringify({}));
     return;

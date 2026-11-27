@@ -4,14 +4,14 @@
       {
         "type": "command",
         "command": "node ./dist/agy/hook-session-start.js",
-        "timeout": 10
+        "timeout": 20
       }
     ],
     "PreInvocation": [
       {
         "type": "command",
         "command": "node ./dist/agy/hook-pre-invocation.js",
-        "timeout": 10
+        "timeout": 20
       }
     ]
   }

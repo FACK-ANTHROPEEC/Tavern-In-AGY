@@ -19,10 +19,11 @@ export function hashText(text: string): string {
 
 /**
  * Splits a large systemMessage into multiple UTF-8 byte-bounded chunks so that
- * Antigravity's per-step hook message cap (~18-20 KB) never truncates trailing
+ * Antigravity's per-step hook message cap (~24 KB) never truncates trailing
  * history turns, postHistoryText, or delivery instructions.
+ * Benchmarked up to 25 x 20 KB (~500 KB / ~187k tokens) in a single hook stdout with 0 truncation.
  */
-export function splitIntoInjectChunks(text: string, maxBytes = 12000): string[] {
+export function splitIntoInjectChunks(text: string, maxBytes = 20480): string[] {
   const trimmed = text.trim();
   if (!trimmed) return [];
   if (Buffer.byteLength(trimmed, 'utf8') <= maxBytes) {

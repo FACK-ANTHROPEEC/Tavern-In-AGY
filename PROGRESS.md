@@ -1,21 +1,20 @@
 # Project Progress & Context Snapshot
 
 ## 1. 当前状态与里程碑
-- **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agent `tavern-rp`）打造的 SillyTavern 全通用兼容 Roleplay 引擎，零反代、零凭据抽取。
-- **当前阶段**：**v0.7.3**（默认单窗口导演模式 + 真·通用无硬编码渲染管线 + 去 `tavern` 化中性命名 `story_*` / `story-director` / `story-writer` + 无损多周目存档 + 公开 `README.md` 与 MIT 协议）已完成测试、构建与安装。
+- **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agents `story-director`/`story-writer`）打造的本地互动小说与角色扮演创作引擎，零反代、零凭据抽取。
+- **当前阶段**：**v0.7.4**（单窗口导演模式默认开启 + 20 KB 单进程多分块 / 500 KB 实测零截断 + 15 万上下文动态预算续接 + 独立净室声明）已完成测试、构建、安装并就绪推送。
 - **最近完成**：
-  - 默认开启 `directorMode: true`；除插件名 `TavernInAGY` 外，全部 MCP 工具、Agents、Skill、Hook 注入文案与 UI 全面重构为中性命名（`story_*`、`story-director`、`story-writer`、`story-engine`），仅在纯本地 iframe 沙箱静默保留卡片运行期兼容别名；
-  - 彻底废除 `FloorRenderer` 硬编码示例标签白名单，回归「正则优先 → 未知自定义 XML 标签通用兜底 → 三路分流（凡含 `<style>`/`<script>` 一律隔离进沙箱 iframe）」；
-  - 新增外观与页面尺寸设置（`uiScale` 80~130%、`proseFontSize`、`proseLineHeight`、`maxReadingWidth`）、Author's Note（作者注释）注入、世界书冷却回合设置、正则美化持久化，以及**无损多周目聊天存档**；
-  - 清理全部测试文件中的本地私人样本文件名（0 skipped），补齐叠甲充分的公开 `README.md` 与 `LICENSE`。
-- **验证状态**：`npm test` 7 套件全绿（0 skipped）；`npm run build` 与 `npm run install:plugin` 通过。
+  - 端到端实测单次 `SessionStart` 吐出 25 块 × 20 KB（500 KB / `187,883` input tokens）零截断、耗时 <1s、缓存全命中；正式将 `splitIntoInjectChunks` 默认上限提至 `20480`，`hooks.json` 超时放宽至 `20s`；
+  - 移除 `formatForForkResume` 的 30 楼硬上限，升级为按 **150,000 tokens**（+ 480 KB 安全护栏）从最新楼层倒序填充；
+  - 补全 `README.md` 独立净室实现与商标免责声明，中性化 `package.json` 描述。
+- **验证状态**：`npm test` **7 套件 / 29 用例全绿（0 skipped）**；`npm run build:backend` 与 `npm run install:plugin` 通过。
 
 ## 2. 架构约束与关键契约
 - **目录与分层红线**：
   - `src/core/` 零 AGY 宿主依赖（含 `regex-engine.ts`、`mvu-engine.ts`、`ejs-engine.ts`、`macro-engine.ts`、`card-parser.ts`、`preset-parser.ts`、`lorebook-engine.ts`、`story-log.ts`）；
   - `src/agy/` 薄适配层；`src/ui/` 单文件打包（`vite-plugin-singlefile`），暖墨衬线书卷主题固定不随宿主冷色覆盖。
 - **核心契约**：
-  - `mcp-server.ts` 严守轨迹 1 MiB 限制：`tavern_open_panel` / `tavern_commit_turn` 省略 base64 头像与完整显示正则，由 `tavern_app_bootstrap`（App-Only）拉取完整 `activeDisplayRegexScripts` 与前端资源；
+  - `mcp-server.ts` 严守轨迹 1 MiB 限制：`story_open_panel` / `story_commit_turn` 省略 base64 头像与完整显示正则，由 `story_app_bootstrap`（App-Only）拉取完整 `activeDisplayRegexScripts` 与前端资源；
   - `FloorRenderer.tsx` 将交互式 HTML+JS 正则输出（含 `<script>` / `<!DOCTYPE` / `on*=`）隔离在自动调高 `iframe srcDoc` 中，通过 `postMessage` 桥接 `triggerSlash` 到侧边栏直聊；
   - `StoryLogStore.formatForForkResume` 对分支续写楼层按真实深度执行 `promptOnly` 正则压缩远古楼层。
 - **环境与避坑约束**：
@@ -31,4 +30,4 @@
 - `src/core/mvu-engine.ts` / `ejs-engine.ts` / `macro-engine.ts`：真 MVU、EJS 与 ST 宏全集
 - `src/agy/mcp-server.ts` & `src/agy/hook-*.ts`：MCP Server（动态 CSP + 预设/正则编辑工具）与自动注入钩子
 - `src/ui/App.tsx` / `FloorRenderer.tsx` / `MvuTreeView.tsx` / `TavernFrontendHost.tsx`：暖墨直聊阅读器、混合楼层渲染与侧边栏舞台
-- `plugin/agents/tavern-rp.md`：单一常驻纯净 RP 模式 Custom Agent
+- `plugin/agents/story-director.md` & `story-writer.md`：单窗口导演调度器与纯净写手子智能体

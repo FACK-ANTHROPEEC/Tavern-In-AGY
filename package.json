@@ -1,7 +1,7 @@
 {
   "name": "tavern-in-agy",
   "version": "0.7.0",
-  "description": "SillyTavern-compatible Roleplay engine built natively for Antigravity (MCP App + Local MCP Server + Lifecycle Hooks)",
+  "description": "Local interactive fiction and character-card roleplay studio plugin built natively for Antigravity (MCP App + Local MCP Server + Lifecycle Hooks)",
   "type": "module",
   "scripts": {
     "build:backend": "tsc -p tsconfig.json",

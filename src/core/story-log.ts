@@ -13,6 +13,34 @@ export function resolveStoryKey(cardId: string, slotId?: string): string {
   return `${base}__slot_${slotId}`;
 }
 
+export function estimateContextTokens(text: string): number {
+  if (!text) return 0;
+  let cjk = 0;
+  let other = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0x3000 && code <= 0x303f) ||
+      (code >= 0xff00 && code <= 0xffef)
+    ) {
+      cjk += 1;
+    } else {
+      other += 1;
+    }
+  }
+  return Math.ceil(cjk * 1.1 + other / 3.8);
+}
+
+export interface ResumeBudgetOptions {
+  /** Max estimated context tokens for resumed history (default: 150_000). */
+  maxContextTokens?: number;
+  /** Hard UTF-8 byte safety ceiling for resumed history (default: 480_000). */
+  maxContextBytes?: number;
+  /** Optional explicit turn cap; 0 or omitted means unlimited (bounded only by context budget). */
+  maxTurns?: number;
+}
+
 export class StoryLogStore {
   private readonly storiesDir: string;
 
@@ -155,18 +183,28 @@ export class StoryLogStore {
     turns: StoryTurn[],
     charName: string,
     userName: string,
-    maxTurns = 15,
+    budgetOrMaxTurns: number | ResumeBudgetOptions = {},
     regexScripts: RegexScript[] = [],
   ): string {
-    const recent = turns.slice(-maxTurns);
-    if (recent.length === 0) return '';
-    const lines: string[] = [
-      `[Resumed Story Branch · Last ${recent.length} Turns]`,
-      'Continue seamlessly from the exact edited/rolled-back story state below:',
-    ];
-    for (let i = 0; i < recent.length; i++) {
-      const t = recent[i];
-      const depth = recent.length - 1 - i;
+    if (turns.length === 0) return '';
+    const opts: ResumeBudgetOptions =
+      typeof budgetOrMaxTurns === 'number'
+        ? { maxTurns: budgetOrMaxTurns }
+        : budgetOrMaxTurns;
+    const maxContextTokens = opts.maxContextTokens ?? 150_000;
+    const maxContextBytes = opts.maxContextBytes ?? 480_000;
+    const candidateTurns =
+      opts.maxTurns && opts.maxTurns > 0 ? turns.slice(-opts.maxTurns) : turns;
+
+    // Walk backward from the latest turn so recent history is always preserved within the 150k context budget.
+    const selectedBlocks: string[] = [];
+    let usedTokens = 0;
+    let usedBytes = 0;
+
+    for (let i = candidateTurns.length - 1; i >= 0; i--) {
+      const t = candidateTurns[i];
+      const depth = candidateTurns.length - 1 - i;
+      const parts: string[] = [];
       if (t.userMessage) {
         const userText =
           regexScripts.length > 0
@@ -176,7 +214,7 @@ export class StoryLogStore {
                 depth,
               })
             : t.userMessage;
-        lines.push(`\n### Turn ${t.index} (${userName})\n${userText}`);
+        parts.push(`\n### Turn ${t.index} (${userName})\n${userText}`);
       }
       const aiText =
         regexScripts.length > 0
@@ -186,9 +224,30 @@ export class StoryLogStore {
               depth,
             })
           : t.narrative;
-      lines.push(`\n### Turn ${t.index} (${charName})\n${aiText}`);
+      parts.push(`\n### Turn ${t.index} (${charName})\n${aiText}`);
+
+      const block = parts.join('\n');
+      const blockTokens = estimateContextTokens(block);
+      const blockBytes = Buffer.byteLength(block, 'utf8');
+
+      if (
+        selectedBlocks.length > 0 &&
+        (usedTokens + blockTokens > maxContextTokens || usedBytes + blockBytes > maxContextBytes)
+      ) {
+        break;
+      }
+      selectedBlocks.push(block);
+      usedTokens += blockTokens;
+      usedBytes += blockBytes;
     }
-    return lines.join('\n');
+
+    if (selectedBlocks.length === 0) return '';
+    selectedBlocks.reverse();
+    const header = [
+      `[Resumed Story Branch · Last ${selectedBlocks.length} Turns]`,
+      'Continue seamlessly from the exact edited/rolled-back story state below:',
+    ];
+    return [...header, ...selectedBlocks].join('\n');
   }
 
   private rewrite(storyKey: string, turns: StoryTurn[]): void {

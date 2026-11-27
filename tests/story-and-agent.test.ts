@@ -80,6 +80,31 @@ describe('StoryLogStore (JSONL story log & rollback)', () => {
     store.deleteSlot(slot2.storyKey);
     expect(store.listSlots('card-x', 'default')).toHaveLength(1);
   });
+
+  it('retains more than 30 turns when within 150k context budget and trims oldest turns when budget is exceeded', () => {
+    const dir = makeTmpDir();
+    const store = new StoryLogStore(dir);
+    for (let i = 1; i <= 45; i++) {
+      store.appendTurn('card-long', {
+        userMessage: `第${i}轮用户输入`,
+        narrative: `第${i}轮剧情正文内容。`.repeat(10),
+      });
+    }
+    const allTurns = store.readTurns('card-long');
+    const fullResume = store.formatForForkResume(allTurns, 'Char', 'User', {
+      maxContextTokens: 150_000,
+    });
+    expect(fullResume).toContain('Last 45 Turns');
+    expect(fullResume).toContain('Turn 1 (Char)');
+    expect(fullResume).toContain('Turn 45 (Char)');
+
+    // Tight budget keeps only the newest turns
+    const tightResume = store.formatForForkResume(allTurns, 'Char', 'User', {
+      maxContextTokens: 600,
+    });
+    expect(tightResume).toContain('Turn 45 (Char)');
+    expect(tightResume).not.toContain('Turn 1 (Char)');
+  });
 });
 
 describe('Built-in story-writer & story-director Custom Agent manifests', () => {
