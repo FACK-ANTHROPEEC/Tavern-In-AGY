@@ -50,14 +50,35 @@ copyRecursive(distSrc, path.join(pluginTarget, 'dist'));
 fs.copyFileSync(path.join(projectRoot, 'package.json'), path.join(pluginTarget, 'package.json'));
 
 const nodeModulesTarget = path.join(pluginTarget, 'node_modules');
-const nodeModulesSrc = path.join(projectRoot, 'node_modules');
-if (!fs.existsSync(nodeModulesTarget) && fs.existsSync(nodeModulesSrc)) {
-  try {
-    fs.symlinkSync(nodeModulesSrc, nodeModulesTarget, 'junction');
-    console.log('Linked node_modules via directory junction.');
-  } catch {
-    console.log('Symlink failed; copying node_modules...');
+const nodeModulesSrc = path.join(pluginTarget === projectRoot ? '' : projectRoot, 'node_modules');
+const tmpRoot = path.resolve(os.tmpdir()).toLowerCase();
+const isInTempDir =
+  projectRoot.toLowerCase().startsWith(tmpRoot) ||
+  /(?:^|[\\/])(tmp|temp)(?:[\\/]|$)/i.test(projectRoot);
+const forceCopy = process.argv.includes('--copy') || isInTempDir;
+
+// Detect broken/dangling symlink at nodeModulesTarget and clean it up
+try {
+  const lstat = fs.lstatSync(nodeModulesTarget);
+  if (lstat.isSymbolicLink() && (!fs.existsSync(nodeModulesTarget) || forceCopy)) {
+    fs.rmSync(nodeModulesTarget, { recursive: true, force: true });
+  }
+} catch {
+  // target does not exist yet
+}
+
+if (!fs.existsSync(nodeModulesTarget) && nodeModulesSrc && fs.existsSync(nodeModulesSrc)) {
+  if (forceCopy) {
+    console.log('Source is in a temporary directory (or --copy set); copying node_modules for standalone safety...');
     copyRecursive(nodeModulesSrc, nodeModulesTarget);
+  } else {
+    try {
+      fs.symlinkSync(nodeModulesSrc, nodeModulesTarget, 'junction');
+      console.log('Linked node_modules via directory junction.');
+    } catch {
+      console.log('Symlink failed; copying node_modules...');
+      copyRecursive(nodeModulesSrc, nodeModulesTarget);
+    }
   }
 }
 

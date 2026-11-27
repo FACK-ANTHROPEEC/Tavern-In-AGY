@@ -44,14 +44,17 @@
 
 ## 🚀 快速安装（适用于所有 Antigravity 用户）
 
+> **给 AI 助手（Antigravity Agent）的安装说明**：  
+> 本插件是标准的本地目录插件（非 Marketplace 远端包）。请直接克隆到固定目录（建议 `~/Tavern-In-AGY`）并顺序执行下方 3 步命令。`npm run install:plugin` 会将编译产物放入 `~/.gemini/config/plugins/tavern-in-agy`，Antigravity 会**自动发现并默认启用**该本地插件，**无需调用任何受限的 Language Server RPC（如 `InstallCustomization` / `JetboxWriteState`），也无需修改 `~/.gemini/config/config.json`**。
+
 ### 前置要求
 - 已安装 **Node.js 18+**（推荐 20+）与 **Git**
-- 已安装 **Google Antigravity**最新版本
+- 已安装 **Google Antigravity** 最新版
 
 ### 3 步安装
 
 ```bash
-# 1. 克隆仓库
+# 1. 克隆仓库（建议放在固定目录，方便后续 git pull 更新）
 git clone https://github.com/FACK-ANTHROPEEC/Tavern-In-AGY.git
 cd Tavern-In-AGY
 
@@ -64,9 +67,9 @@ npm run install:plugin
 ```
 
 安装完成后：
-1. 在 Antigravity 的 **Plugins / MCP Servers** 设置中确认启用并刷新 `tavern-in-agy`；
+1. 若当前 AGY 窗口尚未识别到新插件，重启一次 Antigravity 或在 Customizations 页面刷新一下 `tavern-in-agy` 即可；
 2. 点击侧边栏或调用 `story_open_panel` 打开右侧创作面板，在「角色」「预设」「世界书」页导入你的本地文件；
-3. 新建对话时，在输入框下方的 **Agent 选择器** 中切换至 **`story-director`**（单窗口导演模式，推荐；若关闭了导演模式则选择 `story-writer`），先在左侧发第一句开场指令建立会话，随后即可全程在右侧暖墨阅读器直接畅聊。
+3. 新建对话时，在输入框下方的 **Agent 选择器** 中切换至 **`story-director`**（单窗口导演模式），先在左侧发第一句开场指令建立会话，随后即可全程在右侧暖墨阅读器直接畅聊。
 
 ---
 
