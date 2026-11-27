@@ -45,8 +45,8 @@ export function buildMemoryPromptInstruction(raw?: Partial<MemoryPluginConfig> |
 
   return [
     '[Memory Summary Contract]',
-    `请在本轮正文完全结束后的最末尾，附加一段约 ${cfg.summaryLengthHint} 字的客观剧情小总结，并严格包裹在 <memory_summary>...</memory_summary> 标签内。`,
-    '要求：仅记录本轮已发生的客观事实——时间/地点变化、出场人物、核心行动与对话结论、重要伏笔或关系状态变动；不要包含选项、系统说明、HTML 代码或心理旁白堆砌。',
+    `在 story_commit_turn 的 narrative 参数正文末尾，附带一段约 ${cfg.summaryLengthHint} 字的客观剧情小总结，放在 <memory_summary>...</memory_summary> 标签内即可，方便侧边栏自动收纳。`,
+    '说明：记录本轮已发生的客观事实（时间/地点变化、出场人物、核心行动与对话结论、重要伏笔或关系变动），保持简洁。',
   ].join('\n');
 }
 

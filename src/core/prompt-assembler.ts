@@ -334,7 +334,7 @@ export function assembleSessionStart(params: {
   }
 
   parts.push(
-    '[Story Panel Delivery] Stay 100% in Roleplay mode and do NOT invoke coding, file, shell, or browser tools. Put your full turn output (including any preset CoT/formatting tags and story prose) inside `story_commit_turn(narrative)`. Do not repeat story prose in main chat; end main chat with only a 1-line floor index (e.g., `✦ 第 #N 楼已落笔至侧边栏`).',
+    '[Story Panel Delivery] 请将本轮完整内容（含预设标签与 `<memory_summary>`）通过 `call_mcp_tool(ServerName="tavern-in-agy_tavern-in-agy", ToolName="story_commit_turn", Arguments={"narrative": "..."})` 提交至侧边栏，完成后回复一行楼层索引（如：`✦ 第 #N 楼已落笔至侧边栏`）即可。',
   );
 
   const systemMessage = parts.filter((p) => p.trim().length > 0).join('\n\n---\n\n');

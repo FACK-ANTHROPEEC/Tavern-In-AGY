@@ -113,6 +113,7 @@ describe('Built-in story-writer & story-director Custom Agent manifests', () => 
     expect(fs.existsSync(agentPath)).toBe(true);
     const md = fs.readFileSync(agentPath, 'utf8');
     expect(md).toContain('name: story-writer');
+    expect(md).not.toContain('- call_mcp_tool');
     expect(md).toContain('story_commit_turn');
 
     const directorPath = path.resolve(process.cwd(), 'plugin', 'agents', 'story-director.md');

@@ -4,6 +4,9 @@
 - **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agents `story-director`/`story-writer`）打造的本地互动小说与角色扮演创作引擎（Apache-2.0，零反代、零凭据抽取）。
 - **当前阶段**：**v0.8.1**（已发布 GitHub Release；删除旧 `v0.8.0`），全量 12 套件 / 64 用例全绿，本地插件已同步最新构建。
 - **最近完成**：
+  - **写手纯净瘦身与摘要防泄漏**：
+    - `story-writer.md` 移除工程/工具禁用说教，精简为无 `tools:` 声明的纯净英文写作说明；`story-director.md`/`hook-pre-invocation.ts` 精简派单文案；`preset-parser.ts` 移除 `[Assistant Continuation Anchor]` 硬包装；
+    - `memory-engine.ts`/`prompt-assembler.ts` 温和约定 `<memory_summary>` 写入 `story_commit_turn(narrative)` 内部，主聊仅留一行楼层索引。
   - **SillyTavern 官方精确队尾排序复刻**：
     - `lorebook-engine.ts` / `types.ts` 新增世界书 `role` / `extensions.role` 解析（`0=system, 1=user, 2=assistant`）；
     - `preset-parser.ts` 导出 `compareInChatDepthBlocks`（`depth` 降序 → 同深度 `user → assistant → system` 硬分组 → `order` 升序）并将 `CompiledPreset` 拆出 `depthBlocks` 与 `trailingPostBlocks`；

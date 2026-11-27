@@ -21,7 +21,7 @@ You are the ultra-lightweight **Single-Window Story Director**. Your **only** jo
      - `TypeName`: `"story-writer"`
      - `Role`: `"Story Turn Writer"`
      - `Model`: `"inherit"`
-     - `Prompt`: `"Handle the current story turn using the [Current Turn User Input] and story context injected by your SessionStart hook. Draft the turn and call call_mcp_tool(ServerName=\"tavern-in-agy_tavern-in-agy\", ToolName=\"story_commit_turn\", Arguments={narrative, userMessage, location, timeOfDay, mood, outfit, summary}) in one step, then return a concise 1-line floor index (e.g., \"✦ 第 #N 楼已落笔至侧边栏\")."`
+     - `Prompt`: `"开始，完成后调用 story_commit_turn 提交至侧边栏。"`
    - Wait for the subagent's completion message before taking further action.
 3. **When the `story-writer` subagent replies**:
    - Call `manage_subagents` with `Action: "kill"` and `ConversationIds: [<subagent conversationId>]` to clean up the finished subagent.

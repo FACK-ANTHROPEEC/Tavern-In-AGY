@@ -74,7 +74,8 @@ describe('extended ST macros & depth/prefill preset compilation', () => {
     expect(compiled.stats.prefillCount).toBe(1);
     const idx4 = compiled.postHistoryText.indexOf('DEPTH_FOUR');
     const idx0 = compiled.postHistoryText.indexOf('DEPTH_ZERO');
-    const idxPrefill = compiled.postHistoryText.indexOf('[Assistant Continuation Anchor]');
+    const idxPrefill = compiled.postHistoryText.indexOf('明白了，我现在开始。');
+    expect(compiled.postHistoryText).not.toContain('[Assistant Continuation Anchor]');
     expect(idx4).toBeGreaterThanOrEqual(0);
     expect(idx0).toBeGreaterThan(idx4);
     expect(idxPrefill).toBeGreaterThan(idx0);
@@ -289,7 +290,8 @@ describe('synthetic multi-preset compilation & regex pipeline regression', () =>
     );
 
     expect(compiled.staticText).not.toContain('{{random::');
-    expect(compiled.postHistoryText).toContain('[Assistant Continuation Anchor]');
+    expect(compiled.postHistoryText).toContain('Understood, continuing the scene.');
+    expect(compiled.postHistoryText).not.toContain('[Assistant Continuation Anchor]');
 
     const sampleAi = '<custom_think>Drafting beat</custom_think>\n「晚风微凉。」\n<custom_options>选项一</custom_options>';
     const afterRegex = applyRegexScripts(sampleAi, preset.regexScripts, {

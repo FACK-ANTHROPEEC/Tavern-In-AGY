@@ -220,7 +220,7 @@ export function handlePreInvocation(
         {
           systemMessage: {
             systemMessage:
-              '[Story Director · Turn Router] You act as a lightweight turn dispatcher for the local interactive fiction side-pane. The current turn context and input have already been prepared locally for the writer subagent via SessionStart. Please delegate this turn by calling invoke_subagent(TypeName="story-writer", Role="Story Turn Writer", Prompt="Handle the current story turn using your SessionStart context and commit via story_commit_turn."), wait for completion, clean up the subagent, and reply concisely with only the 1-line floor index returned by the subagent.',
+              '[Story Director · Turn Router] Delegate this story turn to `story-writer` via invoke_subagent(TypeName="story-writer", Role="Story Turn Writer", Prompt="开始，完成后调用 story_commit_turn 提交至侧边栏。"), wait for completion, clean up the subagent, and reply with only the 1-line floor index.',
           },
         },
       ],

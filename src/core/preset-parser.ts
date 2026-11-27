@@ -353,13 +353,10 @@ export function compilePreset(
 }
 
 function formatRoleTaggedBlock(
-  role: 'system' | 'user' | 'assistant',
+  _role: 'system' | 'user' | 'assistant',
   rendered: string,
-  isAfterHistoryPrefill: boolean,
+  _isAfterHistoryPrefill: boolean,
 ): string {
-  if (isAfterHistoryPrefill && role === 'assistant') {
-    return `[Assistant Continuation Anchor]\nAcknowledge and continue seamlessly from this stance/opening:\n${rendered}`;
-  }
   return rendered;
 }
 
