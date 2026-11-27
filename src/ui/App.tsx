@@ -960,6 +960,7 @@ export function AppView() {
                       activeGreetingIndex={gIdx}
                       onSendMessage={sendTextToChat}
                       onSetInput={(txt) => {
+                        composerTextRef.current = txt;
                         setComposerText(txt);
                         setStatusMsg('已将选项填入下方输入框');
                       }}
@@ -1138,6 +1139,7 @@ export function AppView() {
                         storyTurns={data.storyTurns ?? []}
                         onSendMessage={sendTextToChat}
                         onSetInput={(txt) => {
+                          composerTextRef.current = txt;
                           setComposerText(txt);
                           setStatusMsg('已将选项填入下方输入框');
                         }}

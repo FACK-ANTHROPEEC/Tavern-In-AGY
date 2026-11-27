@@ -1,6 +1,6 @@
 # TavernInAGY 开发与维护手册 (`DEVELOPMENT.md`)
 
-> **当前版本**：`v0.8.1`（`/rp` 单窗口零污染会话隔离 + 导演无回显本地暂存路由 + 记忆插件基础版 + 16 项高危审计全量加固 + 多段 `[InitVar]*`/JSONC/括号路径 MVU 升级 + `<details>` 嵌套状态栏解包 + 主流图床 CSP 白名单，Git 标签 `v0.1.0` → `v0.7.4` → `v0.8.1`）
+> **当前版本**：`v0.8.1`（`/rp` 单窗口零污染会话隔离 + 导演无回显安全暂存与三层防重 + 记忆插件基础版 + 16 项安全加固与 18 项全链路捉虫修复 + 多段 `[InitVar]*`/JSONC/源码顺序 lodash/`display_data` MVU 升级 + `<details>` 嵌套状态栏解包 + 主流图床 CSP 白名单，Git 标签 `v0.1.0` → `v0.7.4` → `v0.8.1`）
 > **定位**：基于 Antigravity 官方原生扩展体系（MCP Apps SEP-1865 + Local MCP Server + Lifecycle Hooks + Skill + Custom Agents）打造的本地互动小说与角色扮演创作侧边栏插件。
 > **合规底线**：100% 官方公开扩展路径，零反代、零 OAuth 凭据抽取、零无人自动循环（不使用 `Stop`/`PostInvocation` 续跑，无自动发送），绝不实现或承诺任何内容安全绕过机制。
 > **用户核心硬偏好（压缩/换窗绝不可忘）**：
@@ -35,10 +35,10 @@ TavernInAGY/
 │   │   ├── story-log.ts           # 本地 JSONL 剧情楼层读写、编辑、记忆摘要编辑、回滚、无损多周目与滑动窗口/15 万预算续接
 │   │   └── storage.ts             # 原子化本地 JSON 仓储（Windows 并发 EPERM/EBUSY 重试 + 临时文件清理）
 │   ├── agy/                       # 【极薄 AGY 适配层】
-│   │   ├── transcript-reader.ts   # 防御性解析 transcript.jsonl
-│   │   ├── hook-session-start.ts  # SessionStart 钩子（20KB 多块 injectSteps + 滑动窗口/15 万续接 + 导演 5 分钟 TTL 握手 + [Current Turn User Input] 注入 + isWriterSubagent 标记）
-│   │   ├── hook-pre-invocation.ts # PreInvocation 钩子（/rp 会话级 rpModeActive 零污染隔离、/rp off 退出、OOC 面板放行、stagedSidePaneInput 无回显转交、回调防重状态机）
-│   │   └── mcp-server.ts          # MCP Server（主流图床 CSP 白名单 + 动态采集、384KB 分片上传、story_app_stage_director_input、轻载荷 story_open_panel、多开场白/记忆/回档同步）
+│   │   ├── transcript-reader.ts   # 防御性解析 transcript.jsonl + readLastUserInputStamp 同轮步号指纹
+│   │   ├── hook-session-start.ts  # SessionStart 钩子（20KB 多块 injectSteps + 非导演隔离与分叉绑定 + 外部世界书 statData 回写 default + 导演 5 分钟 TTL 握手 + [Current Turn User Input] 注入 + isWriterSubagent 标记）
+│   │   ├── hook-pre-invocation.ts # PreInvocation 钩子（/rp 会话级 rpModeActive 零污染隔离、/rp off 退出、OOC 去重放行、stagedSidePaneInput 安全提升与三层同轮防重、非导演同轮步号去重）
+│   │   └── mcp-server.ts          # MCP Server（主流图床 CSP 白名单 + 动态采集、384KB 分片上传、story_app_stage_director_input、轻载荷 story_open_panel、返回载荷剥离楼层 statData、多开场白/记忆/回档同步）
 │   └── ui/                        # 【侧边栏 MCP App】React + Vite 单文件（暖墨衬线书卷风）
 │       ├── App.tsx                # 6-Tab 等宽主界面（正文 / 角色 / 预设 / 世界书 / 记忆 / 状态与设置；右侧发送走本地暂存 + 主窗极简楼层触发信号）
 │       ├── png-unpack.ts          # 浏览器端 PNG V2/V3 本地解包（tEXt/iTXt）与 160px Canvas 缩略图压缩
@@ -58,7 +58,7 @@ TavernInAGY/
 │   └── assets/logo.svg
 ├── README.md & LICENSE            # 公开安装文档（含 AI 助手自动安装说明、合规叠甲与生态致谢）与 Apache-2.0 协议
 ├── scripts/install-plugin.mjs     # 一键安装至 ~/.gemini/config/plugins/tavern-in-agy（自动清理悬空软链、临时目录自动 --copy）
-└── tests/                         # Vitest 全合成单元测试（11套件/52通过/0跳过，零私人文件名）
+└── tests/                         # Vitest 全合成单元测试（12套件/58通过/0跳过，零私人文件名）
 ```
 
 ---
@@ -145,7 +145,7 @@ npm run install:plugin
 2. **Subagent 钩子与工具特性**：
    - `invoke_subagent` 拉起的子智能体 **只触发 `SessionStart`，不触发 `PreInvocation`**，且可直接通过 `call_mcp_tool` 调用 MCP 工具。
    - 插件 Custom Agent 默认**不具备** `invoke_subagent` / `manage_subagents` 工具，必须像 `story-director.md` 一样在 frontmatter 显式声明 `tools: [invoke_subagent, manage_subagents, send_message]`。
-   - **切换 Agent 方式**：Antigravity **不存在 `/agents` 斜杠命令**，切勿在文档或 UI 中误导用户；正确操作是在新建对话窗口时，通过输入框下方的 **Agent 选择器** 切换 `story-director` 或 `story-writer`。
+   - **开启 RP 模式方式**：Antigravity **不存在 `/agents` 斜杠命令**，AGY 2.0 桌面端主窗口输入框下也没有独立 Agent 下拉框；正确操作是在需要玩 RP 的窗口发送 **`/rp`** 绑定单窗口导演模式并打开侧边栏，退出发送 **`/rp off`**（其他普通编程窗口 100% 零注入）。
 3. **Subagent 模型档位限制**：
    - `invoke_subagent.Model` 与 Agent frontmatter 的 `model:` **只接受 4 个抽象枚举**：`inherit` / `flash_lite` / `flash` / `pro`，无法填具体模型代号（如 `4 neon`、`4 hydrogen`）。
    - 若想实现「导演用 `4 hydrogen` + 写手用强模型」，只能主窗口左下角手动选 `4 hydrogen` 并让导演派发时传 `Model: "pro"`（具体 `pro` 档映射哪款模型以客户端实测为准）；若要精确锁定 `4 neon` / `4 carbon`，则主窗口选目标模型并保持 `Model: "inherit"`。
@@ -175,6 +175,14 @@ npm run install:plugin
    - **iframe 折叠缩高不可用 `document.documentElement.scrollHeight`**（它不会小于当前 iframe 视口高度），必须按 `body` 实际可见子元素的 `getBoundingClientRect().bottom` 计算；
    - **`styles.css` 中 `.story-prose` 不得重复硬编码 `font-size` / `line-height`**，必须统一绑定 `--prose-font-size` 与 `--prose-line-height`。
 
+10. **v0.8.1 新增避坑铁律（切勿回退）**：
+    - **侧边栏无回显暂存严禁直接写 `pendingDirectorInput`**：`story_app_stage_director_input` 只写 `stagedSidePaneInput`，必须等 `PreInvocation` 校验当前窗口 `rpModeActive === true` 后才提升为 `pendingDirectorInput`，防止未 `/rp` 或发送失败时留下 5 分钟地雷劫持无关窗口/子智能体；
+    - **AGY 同一轮内会多次触发 `PreInvocation` 且未必传 `invocationNum > 1`**：必须依赖 `readLastUserInputStamp`（`transcript.jsonl` 最新 `USER_INPUT` 的 `step_index|created_at`）+ `lastDispatchedStagedAt` + `directorCommittedAt` 三层防重锁，且 `PreInvocation` 绝不可删除 `stagedSidePaneInput`（统一由 `SessionStart` 消费清空）；
+    - **关闭的 `<details>` 内嵌 HTML 文档**：Chromium 对关闭 `<details>` 后代元素的 `innerText` 返回 `""`，`splitFloorSegments` 必须解包内嵌 `<!doctype html>...</html>` 文档，且 `memory-engine.ts` 匹配裸 `<summary>` 前必须先剥离 `<details>...</details>`；
+    - **MCP 返回载荷剥离每楼 `statData`**：大卡单份 `statData` 可超 125 KB，返回给 UI 的 `storyTurns` / `committedTurn` 必须剥离楼层 `statData`（仅磁盘 JSONL 保留快照用于回滚），避免长局撞爆 1 MiB 轨迹上限；
+    - **MVU 宏与 Zod 垫片**：`macro-engine.ts` 与 `ejs-engine.ts` 必须同时展开 `stat_data`/`display_data`/`delta_data`；`sandbox-shim.ts` 的 `runRegisteredSchemas` 必须 `return current;`（不得返回旧 `STAT`）；`applyMvuUpdates` 必须单遍按源码顺序执行 lodash 更新；
+    - **前端发送与 iframe 安全**：`App.tsx` 回车发送必须检查 `!e.nativeEvent.isComposing`、`onSetInput` 必须同步 `composerTextRef.current`、`MvuZodRuntimeHost` 必须校验 `cardFrontend.cardId === activeCard.id` 并记录 `bakedStatJsonRef`、三处 `onMessage` 必须校验 `evt.source === iframeRef.current?.contentWindow`。
+
 ---
 
 ## 5. 下一步规划与待办路线图
@@ -199,4 +207,5 @@ npm run install:plugin
 - `v0.7.3`：默认开启导演模式 + 全链路中性命名（`story_*` / `story-director` / `story-writer` / `story-engine`）+ 真·通用无硬编码渲染管线 + `getCurrentMessageId`/范围 `getChatMessages`/`/setinput` 沙箱垫片 + 外观与页面尺寸调节 + Author's Note + 无损多周目存档 + 手动填回式 `↻ 重Roll本楼` + 两轮 10 处深水区修复 + 隐私清洗与公开 `README.md`
 - `v0.7.4`：单进程 20 KB 分块（500 KB / 18.7 万 token 实测零截断）+ 15 万上下文动态历史预算 + Apache-2.0 协议与净室独立实现声明
 - `v0.7.5`：大卡 PNG 前端解包 + 384 KB 分片上传 + 真·通用 MVU Zod v4 / 完整 `lodash-es` 后台常驻沙箱（`registerMvuSchema` 工厂函数、`Mvu.events` 双发、`getAllVariables`、`setChatMessages`）+ 多开场白翻页/直跳/初始态补丁 + `resources/read` 动态外链图床 CSP + 每层小铅笔编辑 + 10 楼分页懒加载 + 卡片/预设脚本独立开关 + iframe 折叠精准缩高与 `#send_textarea`/`#send_but` 桥接
-- `v0.8.0`（当前）：记忆插件基础版（顶部独立「记忆」Tab + 总开关 + 提示词约束每轮 ~200 字 `<memory_summary>` + 精确按楼滑动窗口仅喂最新 N 楼完整正文/更早楼层全给小总结 + 逐楼时间线编辑补写 + 正文折叠展示）与 Phase 2–4 进阶记忆/外部 API 规划
+- `v0.8.0`：记忆插件基础版（顶部独立「记忆」Tab + 总开关 + 提示词约束每轮 ~200 字 `<memory_summary>` + 精确按楼滑动窗口仅喂最新 N 楼完整正文/更早楼层全给小总结 + 逐楼时间线编辑补写 + 正文折叠展示）与 Phase 2–4 进阶记忆/外部 API 规划
+- `v0.8.1`（当前）：`/rp` & `/rp off` 单窗口零污染隔离 + 导演无回显安全暂存路由与三层同轮防重锁 + 16 项安全加固与 18 项全链路捉虫修复（`runRegisteredSchemas`、`<details><summary>` 误劫持修复、MVU 源码顺序执行 & `display_data`/`delta_data` 展开 & 防原型链污染、未排入 `prompt_order` 默认禁用、MCP 返回载荷剥离楼层 `statData`、中文输入法防误发、三处 iframe `evt.source` 校验与切卡防串台）+ 主流图床 CSP 白名单（全量 12 套件 / 58 用例通过）
