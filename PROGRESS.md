@@ -21,8 +21,8 @@
   - Windows PowerShell 5.1 不支持 `&&`；`卡片参考/`、`预设参考/` 与 `我即浪潮-*.json` 已在 `.gitignore` 排除。
 
 ## 3. 下一步计划（按优先级）
-1. 推送 `v0.7.3` 至 GitHub 公开仓库 `https://github.com/FACK-ANTHROPEEC/Tavern-In-AGY.git`（历史提交邮箱已全部洗为隐私邮箱，工作区已就绪）。
-2. 设计并实现 **v0.8.0 正文摘要 / 剧情压缩模块**（含分层记忆与「历史记忆注入楼层数」控制），大幅压缩长篇导演模式 Token 消耗。
+1. 设计并实现 **v0.8.0 正文摘要 / 剧情压缩模块**（分层记忆 + `pinnedSummary` + 历史上下文预算调节），大幅压缩长篇导演模式 Token 消耗。
+2. 按需补齐 MVU Zod 进阶兼容（`_.assign` / `_.unset` 与可选 Zod Schema 校验）。
 
 ## 4. 核心文件索引
 - `docs/DESIGN.md` & `DEVELOPMENT.md`：架构设计与完整开发维护指南
