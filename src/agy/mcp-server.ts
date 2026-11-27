@@ -39,10 +39,21 @@ function loadAppHtml(): string {
 }
 
 function collectDynamicResourceDomains(): string[] {
+  // Mainstream, trusted image hosts & public frontend CDNs commonly used by ST cards
   const origins = new Set<string>([
+    'https://i.ibb.co',
+    'https://i.postimg.cc',
+    'https://postimg.cc',
     'https://files.catbox.moe',
     'https://i.imgur.com',
+    'https://s2.loli.net',
     'https://raw.githubusercontent.com',
+    'https://avatars.githubusercontent.com',
+    'https://cdnjs.cloudflare.com',
+    'https://cdn.jsdelivr.net',
+    'https://testingcf.jsdelivr.net',
+    'https://fastly.jsdelivr.net',
+    'https://unpkg.com',
   ]);
   for (const card of storage.listCards()) {
     for (const o of card.resourceOrigins ?? []) {
@@ -66,12 +77,12 @@ function isHtmlBeautifyRegex(replaceString: string): boolean {
 
 function initCardMvuIfEmpty(card: CharacterCard, userName: string, greetingIndex = 0): Record<string, unknown> {
   const books = card.embeddedLorebook ? [card.embeddedLorebook] : [];
-  const base = extractInitVarFromLorebooks(books, userName) ?? {};
+  const base = extractInitVarFromLorebooks(books, userName, card.name) ?? {};
   const allGreetings = [card.firstMessage, ...(card.alternateGreetings ?? [])];
   const clamped = Math.max(0, Math.min(Math.max(0, allGreetings.length - 1), greetingIndex));
   const selectedGreeting = allGreetings[clamped] ?? '';
   if (selectedGreeting && /<update(?:variable)?>/i.test(selectedGreeting)) {
-    return applyMvuUpdates(base, selectedGreeting).statData;
+    return applyMvuUpdates(base, selectedGreeting, { userName, charName: card.name }).statData;
   }
   return base;
 }
@@ -411,8 +422,12 @@ server.registerTool(
     }
     st.updatedAt = new Date().toISOString();
 
-    // Apply generic MVU JSONPatch / _.set updates if present in narrative
-    const mvuRes = applyMvuUpdates(session.statData ?? {}, args.narrative);
+    // Apply generic MVU JSONPatch / _.set / _.add / _.insert / _.remove updates if present in narrative
+    const activeCardForMvu = config.activeCardId ? storage.getCard(config.activeCardId) : null;
+    const mvuRes = applyMvuUpdates(session.statData ?? {}, args.narrative, {
+      userName: config.userName || 'User',
+      charName: activeCardForMvu?.name,
+    });
     session.statData = mvuRes.statData;
 
     const normalizedOptions = (args.options ?? [])

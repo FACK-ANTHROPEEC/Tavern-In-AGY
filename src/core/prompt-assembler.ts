@@ -140,11 +140,11 @@ export function assembleSessionStart(params: {
   let statData: Record<string, unknown> = { ...(session.statData ?? {}) };
   let initializedMvu = false;
   if (Object.keys(statData).length === 0) {
-    const initVar = extractInitVarFromLorebooks(allBooks, userName);
+    const initVar = extractInitVarFromLorebooks(allBooks, userName, card.name);
     if (initVar) {
       statData =
         selectedGreeting && /<update(?:variable)?>/i.test(selectedGreeting)
-          ? applyMvuUpdates(initVar, selectedGreeting).statData
+          ? applyMvuUpdates(initVar, selectedGreeting, { userName, charName: card.name }).statData
           : initVar;
       initializedMvu = true;
     }

@@ -25,41 +25,119 @@ export function stripHiddenDollarKeys(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Parses lodash-style property paths supporting dot notation, numeric indices,
+ * and quoted bracket keys: `a.b[0].c`, `时间[0]`, `角色['a.b'].属性`.
+ */
+export function parseLodashPath(path: string): string[] {
+  if (!path) return [];
+  const parts: string[] = [];
+  let i = 0;
+  let buf = '';
+
+  const flush = () => {
+    if (buf.length > 0) {
+      parts.push(buf);
+      buf = '';
+    }
+  };
+
+  while (i < path.length) {
+    const ch = path[i];
+    if (ch === '.') {
+      flush();
+      i += 1;
+      continue;
+    }
+    if (ch === '[') {
+      flush();
+      const close = path.indexOf(']', i + 1);
+      if (close === -1) {
+        buf += path.slice(i);
+        break;
+      }
+      let inner = path.slice(i + 1, close).trim();
+      if (
+        inner.length >= 2 &&
+        ((inner.startsWith("'") && inner.endsWith("'")) ||
+          (inner.startsWith('"') && inner.endsWith('"')))
+      ) {
+        inner = inner.slice(1, -1).replace(/\\(['"\\])/g, '$1');
+      }
+      if (inner.length > 0) parts.push(inner);
+      i = close + 1;
+      continue;
+    }
+    buf += ch;
+    i += 1;
+  }
+  flush();
+  return parts;
+}
+
+function isArrayIndexSegment(seg: string): boolean {
+  return /^\d+$/.test(seg);
+}
+
 export function getByDotPath(obj: unknown, dotPath: string): unknown {
   if (!dotPath) return obj;
-  const parts = dotPath.split('.').filter(Boolean);
+  const parts = parseLodashPath(dotPath);
   let cur: unknown = obj;
   for (const part of parts) {
     if (cur === null || cur === undefined || typeof cur !== 'object') {
       return undefined;
     }
-    cur = (cur as Record<string, unknown>)[part];
+    if (Array.isArray(cur) && isArrayIndexSegment(part)) {
+      cur = cur[Number(part)];
+    } else {
+      cur = (cur as Record<string, unknown>)[part];
+    }
   }
   return cur;
 }
 
 export function setByDotPath(obj: Record<string, unknown>, dotPath: string, value: unknown): Record<string, unknown> {
-  const parts = dotPath.split('.').filter(Boolean);
+  const parts = parseLodashPath(dotPath);
   if (parts.length === 0) return obj;
-  let cur: Record<string, unknown> = obj;
+  let cur: unknown = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     const seg = parts[i];
-    if (!cur[seg] || typeof cur[seg] !== 'object' || Array.isArray(cur[seg])) {
-      cur[seg] = {};
+    const nextSeg = parts[i + 1];
+    if (Array.isArray(cur) && isArrayIndexSegment(seg)) {
+      const idx = Number(seg);
+      if (!cur[idx] || typeof cur[idx] !== 'object') {
+        cur[idx] = isArrayIndexSegment(nextSeg) ? [] : {};
+      }
+      cur = cur[idx];
+    } else if (cur && typeof cur === 'object') {
+      const rec = cur as Record<string, unknown>;
+      if (rec[seg] === null || rec[seg] === undefined || typeof rec[seg] !== 'object') {
+        rec[seg] = isArrayIndexSegment(nextSeg) ? [] : {};
+      }
+      cur = rec[seg];
+    } else {
+      return obj;
     }
-    cur = cur[seg] as Record<string, unknown>;
   }
-  cur[parts[parts.length - 1]] = value;
+  const last = parts[parts.length - 1];
+  if (Array.isArray(cur) && isArrayIndexSegment(last)) {
+    cur[Number(last)] = value;
+  } else if (cur && typeof cur === 'object') {
+    (cur as Record<string, unknown>)[last] = value;
+  }
   return obj;
 }
 
 export function unsetByDotPath(obj: Record<string, unknown>, dotPath: string): boolean {
-  const parts = dotPath.split('.').filter(Boolean);
+  const parts = parseLodashPath(dotPath);
   if (parts.length === 0) return false;
   let cur: unknown = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     if (!cur || typeof cur !== 'object') return false;
-    cur = (cur as Record<string, unknown>)[parts[i]];
+    const seg = parts[i];
+    cur = Array.isArray(cur) && isArrayIndexSegment(seg)
+      ? cur[Number(seg)]
+      : (cur as Record<string, unknown>)[seg];
   }
   if (!cur || typeof cur !== 'object') return false;
   const last = parts[parts.length - 1];
@@ -106,47 +184,143 @@ export const lodashShim = {
 };
 
 /**
- * Extracts initial MVU `stat_data` JSON from `[initvar]` / `[InitVar]` entries
- * (commonly marked disabled in SillyTavern character_book so they don't bloat raw prompts).
+ * Strips single-line `//` and block `/* ... *\/` comments plus trailing commas outside string literals,
+ * so hand-authored JSONC `[InitVar]` blocks parse reliably.
  */
-export function extractInitVarFromLorebooks(
-  lorebooks: Lorebook[],
-  userName = 'User',
-): Record<string, unknown> | null {
-  for (const book of lorebooks) {
-    for (const entry of book.entries) {
-      const name = (entry.comment || '').trim().toLowerCase();
-      const hasInitKey = entry.keys.some((k) => k.trim().toLowerCase() === '[initvar]');
-      if (name === '[initvar]' || name === 'initvar' || hasInitKey) {
-        const raw = entry.content
-          .trim()
-          .replace(/^```(?:json)?\s*/i, '')
-          .replace(/\s*```$/i, '')
-          .replace(/<user>/gi, userName)
-          .replace(/\{\{user\}\}/gi, userName);
+function sanitizeJsonc(raw: string): string {
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  let i = 0;
+  while (i < raw.length) {
+    const ch = raw[i];
+    const next = raw[i + 1];
+    if (inString) {
+      out += ch;
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '/' && next === '/') {
+      i += 2;
+      while (i < raw.length && raw[i] !== '\n') i += 1;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < raw.length && !(raw[i] === '*' && raw[i + 1] === '/')) i += 1;
+      i += 2;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out.replace(/,\s*([}\]])/g, '$1');
+}
+
+function tryParseJsonObject(raw: string): Record<string, unknown> | null {
+  const attempts = [raw, sanitizeJsonc(raw)];
+  for (const candidate of attempts) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      const match = candidate.match(/\{[\s\S]*\}/);
+      if (match) {
         try {
-          const parsed = JSON.parse(raw);
+          const parsed = JSON.parse(match[0]);
           if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
             return parsed as Record<string, unknown>;
           }
         } catch {
-          // Try extracting first {...} JSON block defensively
-          const match = raw.match(/\{[\s\S]*\}/);
-          if (match) {
-            try {
-              const parsed = JSON.parse(match[0]);
-              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                return parsed as Record<string, unknown>;
-              }
-            } catch {
-              // Ignore malformed initvar
-            }
-          }
+          // continue next attempt
         }
       }
     }
   }
   return null;
+}
+
+function deepMergeObjects(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+): Record<string, unknown> {
+  for (const [k, v] of Object.entries(source)) {
+    const existing = target[k];
+    if (
+      v &&
+      typeof v === 'object' &&
+      !Array.isArray(v) &&
+      existing &&
+      typeof existing === 'object' &&
+      !Array.isArray(existing)
+    ) {
+      deepMergeObjects(existing as Record<string, unknown>, v as Record<string, unknown>);
+    } else {
+      target[k] = v;
+    }
+  }
+  return target;
+}
+
+function isInitVarEntry(comment: string, keys: string[]): boolean {
+  const c = (comment || '').trim().toLowerCase();
+  if (c === 'initvar' || c.includes('[initvar]')) return true;
+  return keys.some((k) => {
+    const lk = k.trim().toLowerCase();
+    return lk === 'initvar' || lk.includes('[initvar]');
+  });
+}
+
+/**
+ * Extracts and deep-merges initial MVU `stat_data` JSON from all `[initvar]` / `[InitVar]*`
+ * entries (e.g. `[InitVar]`, `[InitVar]1st`, `[InitVar]2nd`, commonly marked disabled in ST).
+ */
+export function extractInitVarFromLorebooks(
+  lorebooks: Lorebook[],
+  userName = 'User',
+  charName?: string,
+): Record<string, unknown> | null {
+  const merged: Record<string, unknown> = {};
+  let foundAny = false;
+
+  for (const book of lorebooks) {
+    const matched = book.entries
+      .filter((entry) => isInitVarEntry(entry.comment, entry.keys))
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+    for (const entry of matched) {
+      let raw = entry.content
+        .trim()
+        .replace(/^```(?:jsonc?|yaml)?\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .replace(/<user>/gi, userName)
+        .replace(/\{\{user\}\}/gi, userName);
+      if (charName) {
+        raw = raw.replace(/<char>/gi, charName).replace(/\{\{char\}\}/gi, charName);
+      }
+      const parsed = tryParseJsonObject(raw);
+      if (parsed) {
+        deepMergeObjects(merged, parsed);
+        foundAny = true;
+      }
+    }
+  }
+  return foundAny ? merged : null;
 }
 
 interface JsonPatchOp {
@@ -298,7 +472,10 @@ function extractBalancedJsonArray(body: string): string | null {
  * Quote- and bracket-aware extractor for `_.set(...)`, `_.add(...)`, `_.unset(...)`, `_.assign(...)`.
  * Correctly handles string arguments containing `)`, `;`, `,`, or nested objects/arrays.
  */
-function extractLodashCalls(body: string, fnName: 'set' | 'add' | 'unset' | 'assign'): string[][] {
+function extractLodashCalls(
+  body: string,
+  fnName: 'set' | 'add' | 'unset' | 'assign' | 'insert' | 'remove',
+): string[][] {
   const results: string[][] = [];
   const prefixRe = new RegExp(`_\\.${fnName}\\s*\\(`, 'g');
   let m: RegExpExecArray | null;
@@ -380,14 +557,20 @@ function unquoteStringArg(raw: string): string | null {
   return null;
 }
 
+export interface MvuUpdateOptions {
+  userName?: string;
+  charName?: string;
+}
+
 /**
  * Parses `<update>...</update>` and `<UpdateVariable>...</UpdateVariable>` blocks
- * containing RFC 6902 JSON Patch arrays or `_.set` / `_.assign` statements,
+ * containing RFC 6902 JSON Patch arrays or `_.set` / `_.add` / `_.unset` / `_.assign` / `_.insert` / `_.remove` statements,
  * applies them to `stat_data` with `_` readonly protection, and returns cleaned narrative prose.
  */
 export function applyMvuUpdates(
   currentStatData: Record<string, unknown>,
   text: string,
+  options?: MvuUpdateOptions,
 ): MvuUpdateResult {
   const next = cloneDeep(currentStatData || {});
   let appliedCount = 0;
@@ -397,7 +580,13 @@ export function applyMvuUpdates(
   let match: RegExpExecArray | null;
 
   while ((match = blockRegex.exec(text)) !== null) {
-    const body = match[1];
+    let body = match[1];
+    if (options?.userName) {
+      body = body.replace(/<user>|\{\{user\}\}/gi, options.userName);
+    }
+    if (options?.charName) {
+      body = body.replace(/<char>|\{\{char\}\}/gi, options.charName);
+    }
 
     // 1. Try <JSONPatch> / <json_patch>, fenced json array, or balanced raw JSON array inside block
     const jsonPatchRaw =
@@ -432,7 +621,7 @@ export function applyMvuUpdates(
       if (args.length < 2) continue;
       const dotPath = unquoteStringArg(args[0])?.trim();
       if (!dotPath) continue;
-      const segs = dotPath.split('.');
+      const segs = parseLodashPath(dotPath);
       if (hasReadonlyUnderscoreSegment(segs)) {
         rejectedPaths.push(dotPath);
         continue;
@@ -444,21 +633,26 @@ export function applyMvuUpdates(
       }
     }
 
-    // 3. Support MVU `_.add('path', delta)` statements
+    // 3. Support MVU `_.add('path', delta)` statements (supports both plain numbers and `[value, desc]` tuples)
     for (const args of extractLodashCalls(body, 'add')) {
       if (args.length < 2) continue;
       const dotPath = unquoteStringArg(args[0])?.trim();
       const delta = Number(args[1]);
       if (!dotPath || !Number.isFinite(delta)) continue;
-      const segs = dotPath.split('.');
+      const segs = parseLodashPath(dotPath);
       if (hasReadonlyUnderscoreSegment(segs)) {
         rejectedPaths.push(dotPath);
         continue;
       }
       const curVal = getByDotPath(next, dotPath);
-      const baseNum = typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : Number(curVal) || 0;
-      setByDotPath(next, dotPath, baseNum + delta);
-      appliedCount += 1;
+      if (Array.isArray(curVal) && curVal.length > 0 && typeof curVal[0] === 'number' && Number.isFinite(curVal[0])) {
+        curVal[0] = curVal[0] + delta;
+        appliedCount += 1;
+      } else {
+        const baseNum = typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : Number(curVal) || 0;
+        setByDotPath(next, dotPath, baseNum + delta);
+        appliedCount += 1;
+      }
     }
 
     // 4. Support MVU `_.unset('path')` statements
@@ -466,7 +660,7 @@ export function applyMvuUpdates(
       if (args.length < 1) continue;
       const dotPath = unquoteStringArg(args[0])?.trim();
       if (!dotPath) continue;
-      const segs = dotPath.split('.');
+      const segs = parseLodashPath(dotPath);
       if (hasReadonlyUnderscoreSegment(segs)) {
         rejectedPaths.push(dotPath);
         continue;
@@ -476,33 +670,38 @@ export function applyMvuUpdates(
       }
     }
 
-    // 5. Support MVU `_.assign('path', obj)` or `_.assign('path', 'key', val)` statements (quote- & paren-safe)
+    // 5. Support MVU `_.assign('path', obj)` or `_.assign('path', 'key', val)` statements
     for (const args of extractLodashCalls(body, 'assign')) {
       if (args.length < 2) continue;
       const dotPath = unquoteStringArg(args[0])?.trim();
       if (!dotPath) continue;
-      const segs = dotPath.split('.');
+      const segs = parseLodashPath(dotPath);
       if (hasReadonlyUnderscoreSegment(segs)) {
         rejectedPaths.push(dotPath);
         continue;
       }
       if (args.length === 2) {
         const parsedObj = parseLiteralValue(args[1]);
-        if (parsedObj.ok && parsedObj.value && typeof parsedObj.value === 'object' && !Array.isArray(parsedObj.value)) {
+        if (parsedObj.ok) {
           const existing = getByDotPath(next, dotPath);
-          const targetObj =
-            existing && typeof existing === 'object' && !Array.isArray(existing)
-              ? (existing as Record<string, unknown>)
-              : {};
-          for (const [k, v] of Object.entries(parsedObj.value as Record<string, unknown>)) {
-            if (k.startsWith('_')) {
-              rejectedPaths.push(`${dotPath}.${k}`);
-              continue;
+          if (Array.isArray(existing)) {
+            existing.push(parsedObj.value);
+            appliedCount += 1;
+          } else if (parsedObj.value && typeof parsedObj.value === 'object' && !Array.isArray(parsedObj.value)) {
+            const targetObj =
+              existing && typeof existing === 'object' && !Array.isArray(existing)
+                ? (existing as Record<string, unknown>)
+                : {};
+            for (const [k, v] of Object.entries(parsedObj.value as Record<string, unknown>)) {
+              if (k.startsWith('_')) {
+                rejectedPaths.push(`${dotPath}.${k}`);
+                continue;
+              }
+              targetObj[k] = v;
             }
-            targetObj[k] = v;
+            setByDotPath(next, dotPath, targetObj);
+            appliedCount += 1;
           }
-          setByDotPath(next, dotPath, targetObj);
-          appliedCount += 1;
         }
       } else if (args.length >= 3) {
         const key = unquoteStringArg(args[1])?.trim();
@@ -514,6 +713,75 @@ export function applyMvuUpdates(
         const parsedVal = parseLiteralValue(args[2]);
         if (parsedVal.ok) {
           setByDotPath(next, `${dotPath}.${key}`, parsedVal.value);
+          appliedCount += 1;
+        }
+      }
+    }
+
+    // 6. Support MVU `_.insert('path', val)` / `_.insert('path', 'key', val)` statements
+    for (const args of extractLodashCalls(body, 'insert')) {
+      if (args.length < 2) continue;
+      const dotPath = unquoteStringArg(args[0])?.trim();
+      if (!dotPath) continue;
+      const segs = parseLodashPath(dotPath);
+      if (hasReadonlyUnderscoreSegment(segs)) {
+        rejectedPaths.push(dotPath);
+        continue;
+      }
+      if (args.length === 2) {
+        const parsedVal = parseLiteralValue(args[1]);
+        if (parsedVal.ok) {
+          const existing = getByDotPath(next, dotPath);
+          if (Array.isArray(existing)) {
+            existing.push(parsedVal.value);
+          } else {
+            setByDotPath(next, dotPath, [parsedVal.value]);
+          }
+          appliedCount += 1;
+        }
+      } else if (args.length >= 3) {
+        const key = unquoteStringArg(args[1])?.trim();
+        if (!key || key.startsWith('_')) {
+          if (key?.startsWith('_')) rejectedPaths.push(`${dotPath}.${key}`);
+          continue;
+        }
+        const parsedVal = parseLiteralValue(args[2]);
+        if (parsedVal.ok) {
+          setByDotPath(next, `${dotPath}.${key}`, parsedVal.value);
+          appliedCount += 1;
+        }
+      }
+    }
+
+    // 7. Support MVU `_.remove('path', valueOrKey)` statements
+    for (const args of extractLodashCalls(body, 'remove')) {
+      if (args.length < 2) continue;
+      const dotPath = unquoteStringArg(args[0])?.trim();
+      if (!dotPath) continue;
+      const segs = parseLodashPath(dotPath);
+      if (hasReadonlyUnderscoreSegment(segs)) {
+        rejectedPaths.push(dotPath);
+        continue;
+      }
+      const parsedTarget = parseLiteralValue(args[1]);
+      if (!parsedTarget.ok) continue;
+      const container = getByDotPath(next, dotPath);
+      if (Array.isArray(container)) {
+        const targetVal = parsedTarget.value;
+        const idx =
+          typeof targetVal === 'number' && Number.isInteger(targetVal) && targetVal >= 0 && targetVal < container.length
+            ? targetVal
+            : container.findIndex((item) => item === targetVal || JSON.stringify(item) === JSON.stringify(targetVal));
+        if (idx !== -1) {
+          container.splice(idx, 1);
+          appliedCount += 1;
+        }
+      } else if (container && typeof container === 'object') {
+        const key = String(parsedTarget.value);
+        if (key.startsWith('_')) {
+          rejectedPaths.push(`${dotPath}.${key}`);
+        } else if (key in (container as Record<string, unknown>)) {
+          delete (container as Record<string, unknown>)[key];
           appliedCount += 1;
         }
       }
