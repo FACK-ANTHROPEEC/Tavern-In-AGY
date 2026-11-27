@@ -1,6 +1,6 @@
 # TavernInAGY 开发与维护手册 (`DEVELOPMENT.md`)
 
-> **当前版本**：`v0.7.4`（单窗口导演模式默认开启 + 20 KB 分块/15 万上下文动态预算 + 真·通用无硬编码渲染管线 + `story_*` 中性去词 + 无损多周目存档 + 公开 `README.md` / Apache-2.0 协议，Git 标签 `v0.1.0` → `v0.7.4`）
+> **当前版本**：`v0.7.5`（真·通用 MVU Zod v4 + 完整 Lodash 后台常驻沙箱 + 大卡前端解包/384KB 分片上传 + 多开场白翻页/直跳/初始态初始化 + 外链图床 CSP 修复 + 每层小铅笔编辑 + 10 楼分页懒加载 + 卡片/预设脚本独立开关，Git 标签 `v0.1.0` → `v0.7.4`，主分支最新 `v0.7.5`）
 > **定位**：基于 Antigravity 官方原生扩展体系（MCP Apps SEP-1865 + Local MCP Server + Lifecycle Hooks + Skill + Custom Agents）打造的本地互动小说与角色扮演创作侧边栏插件。
 > **合规底线**：100% 官方公开扩展路径，零反代、零 OAuth 凭据抽取、零无人自动循环（不使用 `Stop`/`PostInvocation` 续跑，无自动发送），绝不实现或承诺任何内容安全绕过机制。
 > **用户核心硬偏好（压缩/换窗绝不可忘）**：
@@ -25,26 +25,28 @@ TavernInAGY/
 │   │   ├── types.ts               # 统一数据模型（Card/Lorebook/Preset/RegexScript/StoryTurn/SessionRuntime/TavernConfig）
 │   │   ├── regex-engine.ts        # 通用 ST 正则引擎（minDepth/maxDepth/placement/markdownOnly/promptOnly/trimStrings/{{match}}/三路分流）
 │   │   ├── macro-engine.ts        # O(N) 栈式嵌套多行宏 + roll/pick/globalvar/incvar/lastUserMessage + JS-Slash-Runner 作用域变量宏
-│   │   ├── mvu-engine.ts          # 通用真 MVU（[initvar] / stat_data / RFC 6902 JSON Patch / _ 只读保护）
+│   │   ├── mvu-engine.ts          # 通用真 MVU（[initvar] / stat_data / RFC 6902 <json_?patch> / _.set/_.assign/_.unset/_.add / _ 只读保护）
 │   │   ├── ejs-engine.ts          # 通用 ST-Prompt-Template (EJS) 渲染引擎（支持 static 与 postHistoryText）
-│   │   ├── card-parser.ts         # ST PNG (tEXt ccv3/chara) & JSON 解析 + 扩展/图床域名采集 + 内嵌世界书解析
-│   │   ├── preset-parser.ts       # ST 社区预设解析（prompt_order / 深度排序 / Prefill 软桥接 / 正则提取 / 空内容分组）
+│   │   ├── card-parser.ts         # ST PNG (tEXt ccv3/chara) & JSON 解析 + alternate_greetings + 扩展/图床域名采集 + 内嵌世界书解析
+│   │   ├── preset-parser.ts       # ST 社区预设解析（prompt_order / 深度排序 / Prefill 软桥接 / 正则与助手脚本提取 / 空内容分组）
 │   │   ├── lorebook-engine.ts     # ST 世界书扫描（主/次关键词、正则、递归、预算 + AGY 冷却去重）
-│   │   ├── prompt-assembler.ts    # 严格 ST 顺序拼装器 + UTF-8 20KB 分块切分器 splitIntoInjectChunks()
+│   │   ├── prompt-assembler.ts    # 严格 ST 顺序拼装器（含多开场白选择与开局 MVU 补丁）+ UTF-8 20KB 分块切分器 splitIntoInjectChunks()
 │   │   ├── story-log.ts           # 本地 JSONL 剧情楼层读写、编辑、回滚、无损多周目与 15 万上下文动态预算续接（含按深度 promptOnly 正则压缩）
 │   │   └── storage.ts             # 原子化本地 JSON 仓储（${PLUGIN_DATA} / TAVERN_DATA_DIR）
 │   ├── agy/                       # 【极薄 AGY 适配层】
 │   │   ├── transcript-reader.ts   # 防御性解析 transcript.jsonl
 │   │   ├── hook-session-start.ts  # SessionStart 钩子（单进程 20KB 多块 injectSteps + 15 万上下文动态续接 + 导演模式 5 分钟 TTL 握手 + 动态世界书扫描）
 │   │   ├── hook-pre-invocation.ts # PreInvocation 钩子（跳过 /slash、导演模式 0 设定注入 + 1 行调度锚点、SessionStart 兜底、同轮去重）
-│   │   └── mcp-server.ts          # MCP Server（动态 CSP、宽容 Schema story_commit_turn、瘦身 delta、App-only 全套管理接口）
+│   │   └── mcp-server.ts          # MCP Server（resources/read 动态 CSP resourceDomains、384KB 分片上传、多开场白/编辑/脚本开关、宽容 story_commit_turn）
 │   └── ui/                        # 【侧边栏 MCP App】React + Vite 单文件（暖墨衬线书卷风）
-│       ├── App.tsx                # 5-Tab 主界面（默认主页=「正文」直聊阅读器 + 2.5s 自动轮询 + 导演开关 + 外观缩放 + 多周目存档 + 手动填回重 Roll）
-│       ├── FloorRenderer.tsx      # 通用三路楼层渲染器（正则优先 → 未知自定义 XML 标签通用自动折叠 → iframe 沙箱隔离）
-│       ├── sandbox-shim.ts        # 统一 CSP 安全 iframe srcDoc 底座（TavernHelper / SillyTavern / _ / toastr / getCurrentMessageId / 双向变量同步）
+│       ├── App.tsx                # 5-Tab 主界面（默认主页=「正文」直聊阅读器 + 10 楼分页懒加载 + 每层小铅笔编辑 + 多开场白翻页/直跳 + 卡片/预设脚本面板 + #send_textarea/#send_but 桥接）
+│       ├── png-unpack.ts          # 浏览器端 PNG V2/V3 本地解包（tEXt/iTXt）与 160px Canvas 缩略图压缩
+│       ├── FloorRenderer.tsx      # 通用三路楼层渲染器（正则优先 → 未知自定义 XML 标签通用自动折叠 → iframe 沙箱隔离 + 开场白跳转事件桥接）
+│       ├── sandbox-shim.ts        # 统一 CSP 安全 iframe srcDoc 底座（正版 Zod v4 / lodash-es / Mvu + registerMvuSchema + events / TavernHelper / getAllVariables / setChatMessages / 精确折叠高度收回）
+│       ├── MvuZodRuntimeHost.tsx  # 静默后台沙箱宿主（自动运行已启用助手脚本注册 Zod Schema 并派生回写 stat_data）
 │       ├── MvuTreeView.tsx        # 通用可折叠 stat_data 属性树
 │       ├── TavernFrontendHost.tsx # 通用侧边栏卡片前端美化 / 悬浮球舞台（全 iframe 沙箱，无 new Function）
-│       └── styles.css             # 暖深墨信纸横纹 + 宋体衬线 + 莫兰迪暖棕胶囊开关
+│       └── styles.css             # 暖深墨信纸横纹 + 宋体衬线 + 莫兰迪暖棕胶囊开关 + 滑块字号/行距变量绑定
 ├── plugin/                        # AGY 插件清单模板（由 install:plugin 复制至全局插件目录，安装前自动清理旧 agents/skills）
 │   ├── plugin.json                # 仅含官方合法顶层字段（v0.7.3）
 │   ├── mcp_config.json            # 挂载 dist/agy/mcp-server.js
@@ -55,7 +57,7 @@ TavernInAGY/
 │   └── assets/logo.svg
 ├── README.md & LICENSE            # 公开安装文档（含合规叠甲与生态致谢）与 Apache-2.0 协议
 ├── scripts/install-plugin.mjs     # 一键安装至 ~/.gemini/config/plugins/tavern-in-agy
-└── tests/                         # Vitest 全合成单元测试（7套件/29通过/0跳过，零私人文件名）
+└── tests/                         # Vitest 全合成单元测试（8套件/34通过/0跳过，零私人文件名）
 ```
 
 ---
@@ -89,10 +91,18 @@ TavernInAGY/
   - **未知自定义 XML 标签通用兜底**：正则跑完后，对任何未见过的新预设/卡片自定义标签 `<xxx>...</xxx>`，正文容器词（`content`/`story`/`narrative` 等）自动剥壳、未消费的空自闭合占位符静默隐藏，其余全部自动折叠为原生暖纸 `<details>` 抽屉，绝不裸奔污染正文。
   - **统一 CSP 安全 iframe 沙箱（`sandbox-shim.ts`）**：凡含 `<style>` / `<script>` / `<!DOCTYPE` / `on*=` 的正则输出一律隔离进自适应高度 `<iframe sandbox="allow-scripts" srcDoc>`，彻底杜绝样式串扰与 `new Function` CSP 拦截；内置 `TavernHelper`（含 `replaceVariables`/`insertOrAssignVariables`/`updateVariablesWith`/`getLastMessageId`/`triggerSlash`）、`SillyTavern.getContext()`、轻量 `_`（lodash）与 `toastr`，并支持选项按钮点击直发及 MVU 变量双向回写。
   - 解除底部内置选项条强绑定：`story-writer.md` 不再要求模型拆填 `options`，`story_commit_turn` 若未传 `options` 自动清空 `latestOptions` 避免换预设后残留旧选项。
-- **净室 MVU & EJS 引擎现状（`mvu-engine.ts` + `ejs-engine.ts`）**：
+- **净室 MVU Zod & EJS 引擎现状（`mvu-engine.ts` + `ejs-engine.ts` + `MvuZodRuntimeHost.tsx` + `sandbox-shim.ts`）**：
   - **100% 独立净室重写**，不复制任何第三方社区插件源码，零 AGPL 传染；
   - **EJS（ST-Prompt-Template）**：内置真实 `ejs` 渲染，支持 `<% %>`、`<%- %>`、`@@preprocessing`、`getvar`、`setvar`、`getwi`、`getchar`、`stat_data` 与 `_`；
-  - **MVU / MVU Zod**：已支持 `[initvar]` 初始化、`<update>`/`<UpdateVariable>` 内 RFC 6902 JSON Patch 与 `_.set`、`_` 前缀只读保护；MVU Zod 的基础变量读写可直接运行，但 `registerMvuSchema`/`z.object` 运行时强校验与 `_.assign`/`_.unset` 留待后续按需补齐。
+  - **真·通用 MVU Zod 运行时**：
+    - 后端 [mvu-engine.ts](file:///d:/GeminiWorkX/AAA1/TavernInAGY/src/core/mvu-engine.ts) 支持 `[initvar]` 初始化、开场白内嵌 `<update>` 初始补丁、`<json_?patch>`（RFC 6902 `replace`/`add`/`remove`）与 `_.set`/`_.assign`/`_.unset`/`_.add`，全程强制 `_` 前缀只读保护；
+    - 前端通过 npm 别名引入正版 **`zod4`（Zod v4）**（与后端 MCP SDK 的 `zod v3` 互不冲突）与正版 **`lodash-es`**，经侧边栏挂载到隔离沙箱 `window.z` 与 `window._`，零外网 CDN 依赖；
+    - 静默后台宿主 [MvuZodRuntimeHost.tsx](file:///d:/GeminiWorkX/AAA1/TavernInAGY/src/ui/MvuZodRuntimeHost.tsx) 自动运行当前激活卡/预设的助手脚本（自动剥离外网 CDN `import 'https://...'` 行并支持顶层 `await`），完整支持 `registerMvuSchema(schema | () => schema)`、`Mvu`（`events`/`getMvuData`/`replaceMvuData`/`setMvuVariable`/`getRecordFromMvuData`）、`getAllVariables()`、`setChatMessages`（含 `swipe_id` 与 `data.stat_data` 写回）及 `eventOn` + `document` `CustomEvent` 双发事件生命周期。
+- **多开场白、大卡导入与阅读器体验（v0.7.5）**：
+  - **大卡无上限导入**：[png-unpack.ts](file:///d:/GeminiWorkX/AAA1/TavernInAGY/src/ui/png-unpack.ts) 在浏览器本地解包 PNG `tEXt`/`iTXt` 并用 `<canvas>` 压出 `160px` 轻量缩略图，超过 `384 KB` 自动走 `story_app_upload_chunk` 分片上传；`buildBootstrapPayload()` 仅下发激活卡大字段并对旧版超大头像设总预算，杜绝 4 MB IPC 超限；
+  - **多开场白与交互跳转**：解析 V2/V3 `alternate_greetings`，`#0` 开场白右下角提供 `‹ 1/N ›` 翻页与点击数字直跳，同时兼容卡片内置 `setChatMessages([{ message_id: 0, swipe_id }])` 与 `/swipes-go N` 跳转；切换开场白时同步应用该开局自带的 MVU `<update>` 初始态并同步到 `SessionStart` 提示词；
+  - **外链图床 CSP 放行**：`mcp-server.ts` 在 `resources/read` 的 `contents[0]._meta.ui.csp.resourceDomains` 实时返回过滤后的合法图床域名（自动排除 `https://...` 等占位符），沙箱内置 `<meta name="referrer" content="no-referrer" />`；
+  - **编辑与性能**：每层（含 `#0` 开场白与 `#1..#N` 正文）右上角常驻小铅笔编辑按钮；默认仅渲染最近 **10 楼**（可在设置中按 `2~200` 调整），顶部点击按步长懒加载更早楼层；iframe 高度改为按 `body` 实际可见子元素底部计算，折叠动画后零空白残留；侧边栏挂载 `#send_textarea` / `#send_but` 兼容原版选项脚本填入与直发。
 - **宽容单通道交付与实时同步**：
   - `story_commit_turn` 采用全宽容 Zod Schema（所有可选字段支持 `nullish`、数字/字符串互转、`options` 兼容纯字符串数组、`customFields` 兼容任意值），杜绝因小字段格式微差报错导致模型整篇正文重写；返回精简 `delta: true` 载荷避免膨胀对话轨迹。
   - `story-writer.md` 与 `story-director.md` 均明文内联 `story_commit_turn` 精确调用签名，并严格禁止动笔前调用 `story_get_state` / `story_search_lorebook` 或读 schema `.json`，大幅压缩单轮延迟。
@@ -158,6 +168,12 @@ npm run install:plugin
    - 外层 `<div>` 包裹 `<details>` 被劈断 → `hasUnclosedContainerTag` 保护容器完整性；
    - PowerShell 双引号内 `$1` 会被展开为空变量 → 禁止在 PowerShell 双引号 `node -e` 里写正则 `$1` 替换。
 
+9. **v0.7.5 新增避坑铁律（切勿回退）**：
+   - **MCP App CSP 必须挂在 `resources/read` 的 `contents[0]._meta.ui.csp`**，仅挂在 `server.resource()` 注册元数据上会被宿主忽略导致所有外链图床被 `default-src 'none'` 拦截；
+   - **大 PNG 角色卡严禁整图 Base64 单次直传**，必须走 `png-unpack.ts` 本地解包 + 缩略图压缩 + `story_app_upload_chunk` 384 KB 分片上传，且 `callTool` 必须拦截 `res.isError` 杜绝假报成功；
+   - **iframe 折叠缩高不可用 `document.documentElement.scrollHeight`**（它不会小于当前 iframe 视口高度），必须按 `body` 实际可见子元素的 `getBoundingClientRect().bottom` 计算；
+   - **`styles.css` 中 `.story-prose` 不得重复硬编码 `font-size` / `line-height`**，必须统一绑定 `--prose-font-size` 与 `--prose-line-height`。
+
 ---
 
 ## 5. 下一步规划与待办路线图
@@ -168,9 +184,7 @@ npm run install:plugin
      - 在 `StoryLogStore` / `SessionRuntime` 增加分层记忆结构：`pinnedSummary`（阶段性大总结）+ 最近 `N` 楼完整正文（如保留最近 6～10 楼原汁原味，更早楼层替换为精炼摘要）；
      - 支持自动提取预设自带的 `<wave_summary>` / `<summary>` 标签存入每楼 `turn.summary`，并支持在侧边栏手动编辑或一键触发「整理阶段大总结」；
      - `formatForForkResume` 在注入历史楼层时，对超过阈值深度的旧楼层自动输出 `turn.summary` 而非数千字全文，大幅省额度同时保持长期记忆不丢。
-2. **MVU Zod 进阶兼容（按需扩展）**：
-   - 补齐旧式 `_.assign` / `_.unset` / `_.add` 更新语法，并按具体卡片需求支持可选 Zod Schema 校验与数值上下限 clamp。
-3. **导演与写手异构模型配对实测（按用户需求）**：
+2. **导演与写手异构模型配对实测（按用户需求）**：
    - 若用户需要，可在 `story-director` 配置中增加可切换的派发档位（`inherit` vs `pro`），方便主窗口选 `4 hydrogen` 搭配 `pro` 档写手实测路由。
 
 ---
@@ -179,4 +193,5 @@ npm run install:plugin
 
 - `v0.1.0` ~ `v0.7.2`：核心引擎 → AGY Hooks/MCP → 暖墨单文件阅读器 → 真 MVU/EJS → 正则三路渲染 → 单窗口导演模式 + 12 KB 分块防截断
 - `v0.7.3`：默认开启导演模式 + 全链路中性命名（`story_*` / `story-director` / `story-writer` / `story-engine`）+ 真·通用无硬编码渲染管线 + `getCurrentMessageId`/范围 `getChatMessages`/`/setinput` 沙箱垫片 + 外观与页面尺寸调节 + Author's Note + 无损多周目存档 + 手动填回式 `↻ 重Roll本楼` + 两轮 10 处深水区修复 + 隐私清洗与公开 `README.md`
-- `v0.7.4`（当前）：单进程 20 KB 分块（500 KB / 18.7 万 token 实测零截断）+ 15 万上下文动态历史预算 + Apache-2.0 协议与净室独立实现声明
+- `v0.7.4`：单进程 20 KB 分块（500 KB / 18.7 万 token 实测零截断）+ 15 万上下文动态历史预算 + Apache-2.0 协议与净室独立实现声明
+- `v0.7.5`（当前）：大卡 PNG 前端解包 + 384 KB 分片上传 + 真·通用 MVU Zod v4 / 完整 `lodash-es` 后台常驻沙箱（`registerMvuSchema` 工厂函数、`Mvu.events` 双发、`getAllVariables`、`setChatMessages`）+ 多开场白翻页/直跳/初始态补丁 + `resources/read` 动态外链图床 CSP + 每层小铅笔编辑 + 10 楼分页懒加载 + 卡片/预设脚本独立开关 + iframe 折叠精准缩高与 `#send_textarea`/`#send_but` 桥接
