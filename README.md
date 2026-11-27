@@ -66,7 +66,7 @@ npm run install:plugin
 安装完成后：
 1. 在 Antigravity 的 **Plugins / MCP Servers** 设置中确认启用并刷新 `tavern-in-agy`；
 2. 点击侧边栏或调用 `story_open_panel` 打开右侧创作面板，在「角色」「预设」「世界书」页导入你的本地文件；
-3. 在左侧新对话输入 `/agents` 切换至 **`story-director`**（单窗口导演模式，推荐），先在左侧发第一句开场指令建立会话，随后即可全程在右侧暖墨阅读器直接畅聊。
+3. 新建对话时，在输入框下方的 **Agent 选择器** 中切换至 **`story-director`**（单窗口导演模式，推荐；若关闭了导演模式则选择 `story-writer`），先在左侧发第一句开场指令建立会话，随后即可全程在右侧暖墨阅读器直接畅聊。
 
 ---
 

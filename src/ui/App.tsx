@@ -905,7 +905,9 @@ export function AppView() {
                 </label>
               </div>
               <div className="muted">
-                💡 在主聊天框输入 <code>/agents</code> 切换 <strong>story-writer</strong> 进入纯净 RP 模式，在此一键切卡即刻生效。
+                💡 新建对话时在输入框下方的 Agent 选择器中切换至{' '}
+                <strong>{data.config.directorMode ? 'story-director' : 'story-writer'}</strong>
+                ，在此一键切卡即刻生效。
               </div>
               {data.cards.length === 0 && (
                 <div className="muted">暂未导入角色卡，点击右上角导入标准 PNG/JSON 角色卡。</div>
