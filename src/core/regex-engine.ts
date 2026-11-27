@@ -206,7 +206,8 @@ const STANDARD_HTML_TAGS = new Set([
 
 const PROSE_WRAPPER_TAGS = new Set([
   'content', 'story', 'narrative', 'prose', 'response', 'reply', 'dialogue', 'story_text',
-  'scene_text',
+  'scene_text', 'game', 'interleaving', 'output', 'text', 'chapter', 'novel', 'roleplay',
+  'rp', 'main_text', 'body_text',
 ]);
 
 function pickTagIcon(tagLower: string): string {

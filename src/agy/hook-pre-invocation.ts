@@ -220,7 +220,7 @@ export function handlePreInvocation(
         {
           systemMessage: {
             systemMessage:
-              '[Story Director · Turn Router] Delegate this story turn to `story-writer` via invoke_subagent(TypeName="story-writer", Role="Story Turn Writer", Prompt="开始，完成后调用 story_commit_turn 提交至侧边栏。"), wait for completion, clean up the subagent, and reply with only the 1-line floor index.',
+              '[Story Director · Turn Router] Delegate this story turn to `story-writer` via invoke_subagent(TypeName="story-writer", Role="Story Turn Writer", Prompt="开始，本轮所有输出内容均通过调用 story_commit_turn 完整包裹并提交至侧边栏。"), wait for completion, clean up the subagent, and reply with only the 1-line floor index.',
           },
         },
       ],

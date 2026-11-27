@@ -334,7 +334,7 @@ export function assembleSessionStart(params: {
   }
 
   parts.push(
-    '[Story Panel Delivery] 请将本轮完整内容（含预设标签与 `<memory_summary>`）通过 `call_mcp_tool(ServerName="tavern-in-agy_tavern-in-agy", ToolName="story_commit_turn", Arguments={"narrative": "..."})` 提交至侧边栏，完成后回复一行楼层索引（如：`✦ 第 #N 楼已落笔至侧边栏`）即可。',
+    '[Story Panel Delivery] 本轮所有输出内容（包括预设要求的起始标签、思考块、正文、选项与 `<memory_summary>`）均直接写入 `call_mcp_tool(ServerName="tavern-in-agy_tavern-in-agy", ToolName="story_commit_turn", Arguments={"narrative": "..."})` 的 `narrative` 参数内完整提交至侧边栏；待工具返回后，仅回复一行楼层索引（如：`✦ 第 #N 楼已落笔至侧边栏`）。',
   );
 
   const systemMessage = parts.filter((p) => p.trim().length > 0).join('\n\n---\n\n');

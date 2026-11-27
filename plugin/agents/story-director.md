@@ -21,7 +21,7 @@ You are the ultra-lightweight **Single-Window Story Director**. Your **only** jo
      - `TypeName`: `"story-writer"`
      - `Role`: `"Story Turn Writer"`
      - `Model`: `"inherit"`
-     - `Prompt`: `"开始，完成后调用 story_commit_turn 提交至侧边栏。"`
+     - `Prompt`: `"开始，本轮所有输出内容均通过调用 story_commit_turn 完整包裹并提交至侧边栏。"`
    - Wait for the subagent's completion message before taking further action.
 3. **When the `story-writer` subagent replies**:
    - Call `manage_subagents` with `Action: "kill"` and `ConversationIds: [<subagent conversationId>]` to clean up the finished subagent.

@@ -175,6 +175,8 @@ describe('ST regex engine & 3-way floor splitter', () => {
     const raw = [
       '<brand_new_cot>未见过的新预设思维链</brand_new_cot>',
       '<narrative>这是真正的暖纸正文。</narrative>',
+      '<game>小猫之神包裹的正文段落。</game>',
+      '<Interleaving><thinking>交错思考内容</thinking>交错正文内容。</Interleaving>',
       '<custom_xyz_meta>某些元数据</custom_xyz_meta>',
       '<div class="keep">标准HTML保留</div>',
       '<StatusPlaceHolderImpl/>',
@@ -182,9 +184,14 @@ describe('ST regex engine & 3-way floor splitter', () => {
 
     const folded = foldUnknownCustomTags(raw);
     expect(folded).toContain('<details><summary>💭 brand_new_cot</summary>');
+    expect(folded).toContain('<details><summary>💭 thinking</summary>');
     expect(folded).toContain('<details><summary>🏷️ custom_xyz_meta</summary>');
     expect(folded).toContain('这是真正的暖纸正文。');
+    expect(folded).toContain('小猫之神包裹的正文段落。');
+    expect(folded).toContain('交错正文内容。');
     expect(folded).not.toContain('<narrative>');
+    expect(folded).not.toContain('<game>');
+    expect(folded).not.toContain('<Interleaving>');
     expect(folded).not.toContain('<StatusPlaceHolderImpl/>');
     expect(folded).toContain('<div class="keep">标准HTML保留</div>');
   });
