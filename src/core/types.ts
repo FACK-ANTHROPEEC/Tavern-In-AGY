@@ -181,6 +181,8 @@ export interface SessionRuntime {
   isWriterSubagent?: boolean;
   /** Director Mode per-turn handshake state stored on the shared 'default' session to prevent duplicate dispatch on subagent wakeup */
   directorTurnState?: 'idle' | 'dispatched' | 'committed';
+  /** Per-conversation RP activation flag set by `/rp` and cleared by `/rp off`, keeping normal AGY chats 100% isolated */
+  rpModeActive?: boolean;
 }
 
 export interface SessionSnapshot {

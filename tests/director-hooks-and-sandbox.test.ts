@@ -32,9 +32,35 @@ describe('Director Mode multi-agent hook lifecycle', () => {
         activeCardId: 'card-1',
       });
 
+      // 0. Normal AGY coding window (never ran `/rp`) MUST stay 100% untouched even when config.enabled=true
+      const normalPre = handlePreInvocation(
+        { conversationId: 'coding-conv', lastUserInput: '帮我修一下这个 TypeScript 类型报错', invocationNum: 1 },
+        storage,
+      );
+      expect(normalPre.injectSteps).toBeUndefined();
+      expect(storage.getSession('default').pendingDirectorInput).toBeUndefined();
+
       // 1. Director main window opens -> SessionStart must stay 100% clean ({})
       const dirStart = handleSessionStart({ conversationId: 'director-conv' }, storage);
       expect(dirStart.injectSteps).toBeUndefined();
+
+      // 1b. User invokes `/rp` in director-conv -> binds THIS window only, does NOT dispatch writer
+      const rpActivate = handlePreInvocation(
+        { conversationId: 'director-conv', lastUserInput: '/rp', invocationNum: 1 },
+        storage,
+      );
+      expect(rpActivate.injectSteps).toBeUndefined();
+      expect(storage.getSession('director-conv').rpModeActive).toBe(true);
+      expect(storage.getSession('coding-conv').rpModeActive).toBeUndefined();
+
+      // 1c. OOC panel-open request inside bound RP window -> instructs opening panel directly, no writer dispatch
+      const oocOpen = handlePreInvocation(
+        { conversationId: 'director-conv', lastUserInput: '打开侧边栏面板', invocationNum: 1 },
+        storage,
+      );
+      expect(oocOpen.injectSteps?.length).toBe(1);
+      expect(oocOpen.injectSteps?.[0].systemMessage.systemMessage).toContain('story_open_panel');
+      expect(storage.getSession('default').pendingDirectorInput).toBeUndefined();
 
       // 2. User sends "继续" -> Director PreInvocation dispatches story-writer
       const dirPre1 = handlePreInvocation(
@@ -92,6 +118,19 @@ describe('Director Mode multi-agent hook lifecycle', () => {
       );
       expect(dirWakeupAfterFailure.injectSteps).toBeUndefined();
       expect(storage.getSession('default').directorTurnState).toBe('idle');
+
+      // 9. `/rp off` unbinds this window -> subsequent messages return {} with zero RP injection
+      const rpOff = handlePreInvocation(
+        { conversationId: 'director-conv', lastUserInput: '/rp off', invocationNum: 1 },
+        storage,
+      );
+      expect(rpOff.injectSteps).toBeUndefined();
+      expect(storage.getSession('director-conv').rpModeActive).toBe(false);
+      const afterOff = handlePreInvocation(
+        { conversationId: 'director-conv', lastUserInput: '继续', invocationNum: 1 },
+        storage,
+      );
+      expect(afterOff.injectSteps).toBeUndefined();
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

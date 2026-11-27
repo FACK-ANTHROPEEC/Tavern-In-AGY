@@ -34,17 +34,38 @@ export function handlePreInvocation(
 ): HookOutput {
   const config = storage.getConfig();
 
-  if (!config.enabled || !config.activeCardId) {
-    return {};
-  }
-
   const lastUserInput = (payload.lastUserInput ?? '').trim();
   if (!lastUserInput) {
     return {};
   }
 
-  // Skip slash commands (e.g. /tavern-rp, /compact, /plan) so invoking a skill or command never triggers RP injection
+  const convId = payload.conversationId || 'default';
+
+  // `/rp` / `/rp off` per-conversation binding: activates RP ONLY for this conversation window
+  // (even before a card is selected), leaving all other normal AGY chats 100% untouched.
+  const rpCmdMatch = /^\/rp(?:\s+(.*))?$/i.exec(lastUserInput);
+  if (rpCmdMatch) {
+    const arg = (rpCmdMatch[1] ?? '').trim().toLowerCase();
+    const session = storage.getSession(convId);
+    if (arg === 'off' || arg === 'stop' || arg === 'exit' || arg === 'close') {
+      session.rpModeActive = false;
+      storage.saveSession(session);
+    } else {
+      session.rpModeActive = true;
+      storage.saveSession(session);
+      if (!config.enabled) {
+        storage.saveConfig({ enabled: true });
+      }
+    }
+    return {};
+  }
+
+  // Skip other slash commands (e.g. /compact, /plan) so invoking a skill or command never triggers RP injection
   if (/^\/[a-z0-9_-]+(?:\s|$)/i.test(lastUserInput)) {
+    return {};
+  }
+
+  if (!config.enabled || !config.activeCardId) {
     return {};
   }
 
@@ -53,7 +74,6 @@ export function handlePreInvocation(
     return {};
   }
 
-  const convId = payload.conversationId || 'default';
   const session = storage.getSession(convId);
   const shared = convId === 'default' ? session : storage.getSession('default');
 
@@ -66,6 +86,12 @@ export function handlePreInvocation(
   // In Director Mode, story-writer subagent sessions are unlocked by SessionStart and marked `isWriterSubagent`.
   // Never inject [Story Director] prompts into the writer itself or overwrite shared dispatch fields.
   if (config.directorMode && session.isWriterSubagent) {
+    return {};
+  }
+
+  // Per-conversation isolation: only conversations explicitly bound via `/rp` run RP hooks.
+  // Normal AGY coding/Q&A windows remain 100% untouched even while the global switch is enabled.
+  if (!session.rpModeActive) {
     return {};
   }
 
@@ -95,6 +121,24 @@ export function handlePreInvocation(
       shared.directorTurnState = 'idle';
       storage.saveSession(shared);
       return {};
+    }
+
+    // OOC panel-open request inside an active RP window -> open reader directly without dispatching a writer
+    if (
+      /^(?:帮我|请)?(?:打开|呼出|显示|重开|开启).*(?:侧边栏|面板|阅读器)|^open\s+(?:the\s+)?(?:side[- ]?pane|panel|reader)\b/i.test(
+        lastUserInput,
+      )
+    ) {
+      return {
+        injectSteps: [
+          {
+            systemMessage: {
+              systemMessage:
+                '[Story Director · OOC] The user is asking to open the side-pane story reader. Call call_mcp_tool(ServerName="tavern-in-agy_tavern-in-agy", ToolName="story_open_panel", Arguments={}) directly. Do NOT dispatch story-writer.',
+            },
+          },
+        ],
+      };
     }
 
     shared.directorTurnState = 'dispatched';
