@@ -374,6 +374,9 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
             window.parent.postMessage({ widgetId: WID, type: 'tavern:selectGreeting', index: item.swipe_id }, '*');
           } catch(e){}
         }
+        if (item.data && typeof item.data === 'object' && item.data.stat_data && typeof item.data.stat_data === 'object') {
+          replaceVariables(item.data.stat_data);
+        }
       }
     }
     return Promise.resolve();
@@ -473,8 +476,22 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
     };
   }
 
+  function emitMvuEvent(evtName, detailObj){
+    const extra = Array.prototype.slice.call(arguments, 1);
+    eventEmit.apply(null, [evtName].concat(extra));
+    try {
+      if (typeof document !== 'undefined' && typeof CustomEvent !== 'undefined') {
+        document.dispatchEvent(new CustomEvent(evtName, { detail: detailObj }));
+      }
+    } catch(e){}
+  }
+
   let mvuInitEmitted = false;
-  function registerMvuSchema(schema){
+  function registerMvuSchema(schemaOrFactory){
+    let schema = schemaOrFactory;
+    if (typeof schemaOrFactory === 'function') {
+      try { schema = schemaOrFactory(); } catch(e){ console.error('[MVU Zod schema factory]', e); return false; }
+    }
     if (!schema || typeof schema.safeParse !== 'function') return false;
     REGISTERED_SCHEMAS.push(schema);
     try {
@@ -484,7 +501,7 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
       runRegisteredSchemas(STAT, true);
       if (!mvuInitEmitted) {
         mvuInitEmitted = true;
-        eventEmit(MVU_EVENTS.VARIABLE_INITIALIZED, makeMvuSnapshot(STAT), CURRENT_ID);
+        emitMvuEvent(MVU_EVENTS.VARIABLE_INITIALIZED, makeMvuSnapshot(STAT), CURRENT_ID);
       }
     }
     return true;
@@ -502,7 +519,7 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
       const derived = runRegisteredSchemas(unwrapped || {}, false);
       pushStatUpdate(derived);
       const nextSnap = makeMvuSnapshot(STAT);
-      eventEmit(MVU_EVENTS.VARIABLE_UPDATE_ENDED, nextSnap, prevSnap);
+      emitMvuEvent(MVU_EVENTS.VARIABLE_UPDATE_ENDED, nextSnap, prevSnap);
       return nextSnap;
     },
     setMvuVariable: function(mvuData, path, value){
@@ -551,13 +568,13 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
       if (!mvuInitEmitted && Object.keys(STAT).length > 0) {
         mvuInitEmitted = true;
         runRegisteredSchemas(STAT, true);
-        eventEmit(MVU_EVENTS.VARIABLE_INITIALIZED, makeMvuSnapshot(STAT), CURRENT_ID);
+        emitMvuEvent(MVU_EVENTS.VARIABLE_INITIALIZED, makeMvuSnapshot(STAT), CURRENT_ID);
       } else {
-        eventEmit(MVU_EVENTS.VARIABLE_UPDATE_STARTED, prevSnap, incomingSnap);
-        eventEmit(MVU_EVENTS.BEFORE_MESSAGE_UPDATE, { variables: incomingSnap, message_id: CURRENT_ID });
+        emitMvuEvent(MVU_EVENTS.VARIABLE_UPDATE_STARTED, prevSnap, incomingSnap);
+        emitMvuEvent(MVU_EVENTS.BEFORE_MESSAGE_UPDATE, { variables: incomingSnap, message_id: CURRENT_ID });
         runRegisteredSchemas(STAT, true);
         const finalSnap = makeMvuSnapshot(STAT);
-        eventEmit(MVU_EVENTS.VARIABLE_UPDATE_ENDED, finalSnap, prevSnap);
+        emitMvuEvent(MVU_EVENTS.VARIABLE_UPDATE_ENDED, finalSnap, prevSnap);
       }
       eventEmit('VARIABLES_UPDATED', STAT);
       eventEmit('MESSAGE_RECEIVED', STAT);
