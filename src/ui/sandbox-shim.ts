@@ -7,13 +7,18 @@ export interface SandboxShimOptions {
   currentMessageId?: number;
   /** Raw narrative of the current floor so preset widgets reading current message get original tags */
   currentNarrative?: string;
+  /** All opening greetings ([firstMessage, ...alternateGreetings]) for message #0 swipes */
+  greetings?: string[];
+  /** Currently active opening greeting index (0-based) */
+  activeGreetingIndex?: number;
   storyTurns?: Array<{ index: number; userMessage?: string; narrative: string }>;
   customExtensions?: Record<string, unknown>;
 }
 
 export interface ParsedSlashAction {
-  action: 'send' | 'setInput';
+  action: 'send' | 'setInput' | 'selectGreeting';
   text: string;
+  index?: number;
 }
 
 /**
@@ -28,6 +33,11 @@ export function parseSlashCommandAction(rawCmd: string): ParsedSlashAction | nul
   const parts = trimmed.split(/\|\|/).map((p) => p.trim()).filter(Boolean);
   for (const part of parts) {
     if (/^\/trigger\b/i.test(part)) continue;
+    const swipesGoMatch = part.match(/^\/swipes-go\s+(\d+)$/i);
+    if (swipesGoMatch?.[1]) {
+      const idx = Math.max(0, Number(swipesGoMatch[1]) - 1);
+      return { action: 'selectGreeting', text: '', index: idx };
+    }
     const setInputMatch = part.match(/^\/setinput\s+([\s\S]+)$/i);
     if (setInputMatch?.[1]?.trim()) {
       return { action: 'setInput', text: setInputMatch[1].trim() };
@@ -98,8 +108,39 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
         ? chatMessages[chatMessages.length - 1].message_id
         : 0;
 
+  const allGreetings = Array.isArray(opts.greetings) && opts.greetings.length > 0
+    ? opts.greetings
+    : typeof opts.currentNarrative === 'string' && currentId === 0
+      ? [opts.currentNarrative]
+      : [];
+  const activeGreetingIdx =
+    typeof opts.activeGreetingIndex === 'number'
+      ? Math.max(0, Math.min(Math.max(0, allGreetings.length - 1), opts.activeGreetingIndex))
+      : 0;
+
+  // Ensure message #0 (opening) always exists with swipes[] & swipe_id for multi-greeting cards
+  if (allGreetings.length > 0) {
+    const existingZero = chatMessages.findIndex((m) => m.message_id === 0);
+    const zeroObj = {
+      message_id: 0,
+      name: opts.charName,
+      role: 'assistant',
+      is_user: false,
+      is_hidden: false,
+      message: allGreetings[activeGreetingIdx] ?? allGreetings[0] ?? '',
+      swipe_id: activeGreetingIdx,
+      swipes: allGreetings,
+      data: { stat_data: opts.statData },
+    };
+    if (existingZero >= 0) {
+      chatMessages[existingZero] = zeroObj;
+    } else {
+      chatMessages.unshift(zeroObj);
+    }
+  }
+
   // Ensure the current floor message is always present in CHAT with its raw narrative
-  if (typeof opts.currentNarrative === 'string') {
+  if (typeof opts.currentNarrative === 'string' && currentId !== 0) {
     const existingIdx = chatMessages.findIndex((m) => m.message_id === currentId);
     const currentObj = {
       message_id: currentId,
@@ -256,6 +297,9 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
   function getVariables(){
     return Object.assign({ stat_data: STAT }, STAT);
   }
+  function getAllVariables(){
+    return getVariables();
+  }
   function pushStatUpdate(nextStat){
     STAT = cloneDeep(nextStat || {});
     try {
@@ -320,6 +364,21 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
     return CHAT;
   }
 
+  function setChatMessages(messages){
+    if (Array.isArray(messages)) {
+      for (let i = 0; i < messages.length; i++){
+        const item = messages[i];
+        if (!item || typeof item !== 'object') continue;
+        if (item.message_id === 0 && typeof item.swipe_id === 'number') {
+          try {
+            window.parent.postMessage({ widgetId: WID, type: 'tavern:selectGreeting', index: item.swipe_id }, '*');
+          } catch(e){}
+        }
+      }
+    }
+    return Promise.resolve();
+  }
+
   function triggerSlash(cmd){
     try {
       window.parent.postMessage({ widgetId: WID, type: 'tavern:slash', cmd: String(cmd || '') }, '*');
@@ -332,10 +391,12 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
 
   const TavernHelper = {
     getVariables,
+    getAllVariables,
     replaceVariables,
     insertOrAssignVariables,
     updateVariablesWith,
     getChatMessages,
+    setChatMessages,
     getCurrentMessageId,
     getLastMessageId,
     triggerSlash,
@@ -462,10 +523,12 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
 
   window.triggerSlash = triggerSlash;
   window.getVariables = getVariables;
+  window.getAllVariables = getAllVariables;
   window.replaceVariables = replaceVariables;
   window.insertOrAssignVariables = insertOrAssignVariables;
   window.updateVariablesWith = updateVariablesWith;
   window.getChatMessages = getChatMessages;
+  window.setChatMessages = setChatMessages;
   window.getCurrentMessageId = getCurrentMessageId;
   window.getLastMessageId = getLastMessageId;
   window.eventOn = eventOn;
@@ -566,7 +629,7 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
 })();
 </script>`;
 
-  const baseStyle = `<style>
+  const baseStyle = `<meta name="referrer" content="no-referrer" /><style>
 html,body{margin:0;padding:4px;height:auto!important;min-height:0!important;background:transparent;color:#e5d9c3;font-family:"Noto Serif SC","Source Han Serif SC",system-ui,sans-serif;box-sizing:border-box;}
 *,*::before,*::after{box-sizing:inherit;}
 </style>`;

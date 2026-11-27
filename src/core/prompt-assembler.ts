@@ -10,7 +10,7 @@ import type {
 import { evaluateMacros, type MacroContext } from './macro-engine.js';
 import { compilePreset } from './preset-parser.js';
 import { scanLorebooks } from './lorebook-engine.js';
-import { extractInitVarFromLorebooks } from './mvu-engine.js';
+import { applyMvuUpdates, extractInitVarFromLorebooks } from './mvu-engine.js';
 import { renderEjsTemplate } from './ejs-engine.js';
 
 export function hashText(text: string): string {
@@ -126,13 +126,24 @@ export function assembleSessionStart(params: {
   const allBooks = card.embeddedLorebook ? [card.embeddedLorebook, ...lorebooks] : lorebooks;
   const userName = config.userName || 'User';
 
-  // Initialize MVU stat_data from [initvar] if session.statData is empty
+  // Resolve active opening greeting (0 = firstMessage, 1..N = alternateGreetings)
+  const activeSlot = config.activeChatSlots?.[card.id] || 'default';
+  const storyKey = activeSlot === 'default' ? card.id : `${card.id}__${activeSlot}`;
+  const allGreetings = [card.firstMessage, ...(card.alternateGreetings ?? [])];
+  const rawGreetingIdx = config.activeGreetingIndices?.[storyKey] ?? 0;
+  const greetingIdx = Math.max(0, Math.min(Math.max(0, allGreetings.length - 1), rawGreetingIdx));
+  const selectedGreeting = allGreetings[greetingIdx] || card.firstMessage;
+
+  // Initialize MVU stat_data from [initvar] + selected opening's <update> patch if session.statData is empty
   let statData: Record<string, unknown> = { ...(session.statData ?? {}) };
   let initializedMvu = false;
   if (Object.keys(statData).length === 0) {
     const initVar = extractInitVarFromLorebooks(allBooks, userName);
     if (initVar) {
-      statData = initVar;
+      statData =
+        selectedGreeting && /<update(?:variable)?>/i.test(selectedGreeting)
+          ? applyMvuUpdates(initVar, selectedGreeting).statData
+          : initVar;
       initializedMvu = true;
     }
   }
@@ -203,10 +214,10 @@ export function assembleSessionStart(params: {
     }
   }
 
-  // Strictly place Opening Scene (#0) and existing Story History BEFORE postHistoryText (matching ST chatHistory order)
-  if (card.firstMessage) {
+  // Strictly place Opening Scene (#0, respecting selected alternate greeting) and existing Story History BEFORE postHistoryText
+  if (selectedGreeting) {
     parts.push(
-      `[Turn #0 · Opening Scene (${card.name}) — Already Shown to ${ctx.user}; Continue Directly From Here]\n${renderText(card.firstMessage)}`,
+      `[Turn #0 · Opening Scene (${card.name}) — Already Shown to ${ctx.user}; Continue Directly From Here]\n${renderText(selectedGreeting)}`,
     );
   }
 

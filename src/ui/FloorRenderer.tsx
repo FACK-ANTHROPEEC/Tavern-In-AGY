@@ -14,9 +14,12 @@ interface FloorRendererProps {
   userName: string;
   statData: Record<string, unknown>;
   storyTurns?: Array<{ index: number; userMessage?: string; narrative: string }>;
+  greetings?: string[];
+  activeGreetingIndex?: number;
   onSendMessage: (text: string) => void;
   onSetInput?: (text: string) => void;
   onUpdateStatData?: (nextStatData: Record<string, unknown>) => void;
+  onSelectGreeting?: (index: number) => void;
 }
 
 function renderProseText(text: string, keyPrefix: string) {
@@ -61,9 +64,12 @@ function InlineRegexWidget({
   userName,
   statData,
   storyTurns,
+  greetings,
+  activeGreetingIndex,
   onSendMessage,
   onSetInput,
   onUpdateStatData,
+  onSelectGreeting,
 }: {
   html: string;
   title?: string;
@@ -73,9 +79,12 @@ function InlineRegexWidget({
   userName: string;
   statData: Record<string, unknown>;
   storyTurns?: Array<{ index: number; userMessage?: string; narrative: string }>;
+  greetings?: string[];
+  activeGreetingIndex?: number;
   onSendMessage: (text: string) => void;
   onSetInput?: (text: string) => void;
   onUpdateStatData?: (nextStatData: Record<string, unknown>) => void;
+  onSelectGreeting?: (index: number) => void;
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [height, setHeight] = useState<number>(120);
@@ -87,9 +96,13 @@ function InlineRegexWidget({
       if (!msg || typeof msg !== 'object' || msg.widgetId !== widgetId) return;
       if (msg.type === 'tavern:resize' && typeof msg.height === 'number') {
         setHeight(Math.max(40, Math.min(1600, Math.ceil(msg.height) + 8)));
+      } else if (msg.type === 'tavern:selectGreeting' && typeof msg.index === 'number') {
+        onSelectGreeting?.(msg.index);
       } else if (msg.type === 'tavern:slash' && typeof msg.cmd === 'string') {
         const parsed = parseSlashCommandAction(msg.cmd);
-        if (parsed?.action === 'setInput') {
+        if (parsed?.action === 'selectGreeting' && typeof parsed.index === 'number') {
+          onSelectGreeting?.(parsed.index);
+        } else if (parsed?.action === 'setInput') {
           onSetInput?.(parsed.text);
         } else if (parsed?.action === 'send') {
           onSendMessage(parsed.text);
@@ -100,7 +113,7 @@ function InlineRegexWidget({
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [widgetId, onSendMessage, onSetInput, onUpdateStatData]);
+  }, [widgetId, onSendMessage, onSetInput, onUpdateStatData, onSelectGreeting]);
 
   // Push live stat updates into the mounted iframe without rebuilding srcDoc
   useEffect(() => {
@@ -123,11 +136,13 @@ function InlineRegexWidget({
         statData,
         currentMessageId: messageId,
         currentNarrative: rawNarrative,
+        greetings,
+        activeGreetingIndex,
         storyTurns,
       }),
     // Intentionally keep statData out of srcDoc deps so live updates flow via postMessage without flickering
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [html, widgetId, charName, userName, messageId, rawNarrative],
+    [html, widgetId, charName, userName, messageId, rawNarrative, greetings?.length, activeGreetingIndex],
   );
 
   return (
@@ -156,9 +171,12 @@ export function FloorRenderer({
   userName,
   statData,
   storyTurns,
+  greetings,
+  activeGreetingIndex,
   onSendMessage,
   onSetInput,
   onUpdateStatData,
+  onSelectGreeting,
 }: FloorRendererProps) {
   const segments = useMemo(() => {
     if (!enableRegex) {
@@ -217,9 +235,12 @@ export function FloorRenderer({
             userName={userName}
             statData={statData}
             storyTurns={storyTurns}
+            greetings={greetings}
+            activeGreetingIndex={activeGreetingIndex}
             onSendMessage={onSendMessage}
             onSetInput={onSetInput}
             onUpdateStatData={onUpdateStatData}
+            onSelectGreeting={onSelectGreeting}
           />
         );
       })}

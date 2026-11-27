@@ -43,6 +43,7 @@ export interface CharacterCard {
   personality: string;
   scenario: string;
   firstMessage: string;
+  alternateGreetings?: string[];
   messageExample: string;
   systemPrompt: string;
   postHistoryInstructions: string;
@@ -212,6 +213,10 @@ export interface TavernConfig {
   authorsNoteEnabled?: boolean;
   /** Per-card active multi-playthrough chat slot id (`cardId -> slotId`, default `'default'`) */
   activeChatSlots?: Record<string, string>;
+  /** Selected opening greeting index per storyKey (0 = firstMessage, 1..N = alternateGreetings) */
+  activeGreetingIndices?: Record<string, number>;
+  /** Number of recent floors (user + assistant messages) shown by default before clicking "load earlier" (default 10 = 5 turns) */
+  visibleFloorLimit?: number;
 }
 
 export function createDefaultState(): LiveCharacterState {

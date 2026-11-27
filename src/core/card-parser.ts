@@ -6,10 +6,14 @@ function extractOriginsFromText(text: string, out: Set<string>): void {
   const matches = text.match(/https?:\/\/[a-zA-Z0-9.-]+(?::\d+)?/g);
   if (!matches) return;
   for (const m of matches) {
-    if (m.includes('w3.org')) continue;
+    if (m.includes('w3.org') || m.includes('..')) continue;
     try {
       const u = new URL(m);
-      if (u.protocol === 'https:' || u.protocol === 'http:') {
+      if (
+        (u.protocol === 'https:' || u.protocol === 'http:') &&
+        u.hostname.includes('.') &&
+        !/^\.|\.$/.test(u.hostname)
+      ) {
         out.add(u.origin);
       }
     } catch {
@@ -180,13 +184,25 @@ export function parseCharacterCardJson(
     customExtensions[k] = v;
   }
 
+  const firstMessage = String(data.first_mes ?? data.firstMessage ?? '');
+  const rawAlts = data.alternate_greetings ?? data.alternateGreetings;
+  const alternateGreetings = Array.isArray(rawAlts)
+    ? rawAlts.map((g) => String(g ?? '')).filter((g) => g.length > 0)
+    : [];
+
+  extractOriginsFromText(firstMessage, origins);
+  for (const g of alternateGreetings) {
+    extractOriginsFromText(g, origins);
+  }
+
   return {
     id: opts?.id ?? slugifyId(name),
     name,
     description: String(data.description ?? ''),
     personality: String(data.personality ?? ''),
     scenario: String(data.scenario ?? ''),
-    firstMessage: String(data.first_mes ?? data.firstMessage ?? ''),
+    firstMessage,
+    alternateGreetings: alternateGreetings.length > 0 ? alternateGreetings : undefined,
     messageExample: String(data.mes_example ?? data.messageExample ?? ''),
     systemPrompt: String(data.system_prompt ?? data.systemPrompt ?? ''),
     postHistoryInstructions: String(data.post_history_instructions ?? data.postHistoryInstructions ?? ''),

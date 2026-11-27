@@ -38,6 +38,8 @@ interface CardSummary {
   personality: string;
   scenario: string;
   firstMessage: string;
+  allGreetings?: string[];
+  activeGreetingIndex?: number;
   tags: string[];
   avatarDataUrl?: string;
   hasEmbeddedLorebook: boolean;
@@ -149,6 +151,7 @@ interface TavernConfig {
   unknownTagMode?: 'fold' | 'keep' | 'hide';
   authorsNote?: string;
   authorsNoteEnabled?: boolean;
+  visibleFloorLimit?: number;
 }
 
 interface BootstrapData {
@@ -181,11 +184,16 @@ export function AppView() {
   const [canMessage, setCanMessage] = useState(false);
   const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
   const [editingDraft, setEditingDraft] = useState<string>('');
+  const [editingOpening, setEditingOpening] = useState<boolean>(false);
+  const [editingOpeningDraft, setEditingOpeningDraft] = useState<string>('');
+  const [extraLoadedTurns, setExtraLoadedTurns] = useState<number>(0);
   const [composerText, setComposerText] = useState<string>('');
   const [pendingSend, setPendingSend] = useState<string | null>(null);
   const pendingBaseLastTurnIdRef = useRef<string | null>(null);
   const [cardFrontend, setCardFrontend] = useState<CardFrontendPayload | null>(null);
   const [mvuSchemaCount, setMvuSchemaCount] = useState<number>(0);
+  const [jumpingGreeting, setJumpingGreeting] = useState<boolean>(false);
+  const [jumpGreetingInput, setJumpGreetingInput] = useState<string>('');
   const [showPresetRegexList, setShowPresetRegexList] = useState<boolean>(false);
   const [showPresetHelperList, setShowPresetHelperList] = useState<boolean>(false);
   const [showCardRegexList, setShowCardRegexList] = useState<boolean>(false);
@@ -304,6 +312,13 @@ export function AppView() {
     el.addEventListener('input', onNativeInput);
     return () => el.removeEventListener('input', onNativeInput);
   }, [tab, Boolean(data)]);
+
+  // Reset pagination when switching active card or chat slot
+  useEffect(() => {
+    setExtraLoadedTurns(0);
+    setEditingOpening(false);
+    setEditingTurnId(null);
+  }, [data?.config.activeCardId, data?.activeChatSlot]);
 
   // Auto-scroll to bottom when new turns arrive or user sends a message
   useEffect(() => {
@@ -667,6 +682,12 @@ export function AppView() {
 
   const enableRegexBeautify = data.config.enableRegexBeautify !== false;
   const unknownTagMode = data.config.unknownTagMode ?? 'fold';
+  const visibleFloorLimit = Math.max(2, Math.min(200, data.config.visibleFloorLimit ?? 10));
+  const turnsPerPage = Math.max(1, Math.ceil(visibleFloorLimit / 2));
+  const allStoryTurns = data.storyTurns ?? [];
+  const shownTurnsCount = turnsPerPage + extraLoadedTurns;
+  const hiddenTurnsCount = Math.max(0, allStoryTurns.length - shownTurnsCount);
+  const visibleStoryTurns = hiddenTurnsCount > 0 ? allStoryTurns.slice(-shownTurnsCount) : allStoryTurns;
   const uiScale = Math.max(80, Math.min(130, draftUiScale ?? data.config.uiScale ?? 100));
   const proseFontSize = Math.max(12, Math.min(22, draftFontSize ?? data.config.proseFontSize ?? 14));
   const proseLineHeight = Math.max(1.4, Math.min(2.2, draftLineHeight ?? data.config.proseLineHeight ?? 1.7));
@@ -780,38 +801,174 @@ export function AppView() {
               </div>
             )}
 
-            {activeCard && activeCard.firstMessage && (
-              <div className="story-paper">
-                <div className="row">
-                  <span className="muted">#0 · 开场白 · {activeCard.name}</span>
-                  <span className="badge">Opening</span>
-                </div>
-                <FloorRenderer
-                  narrative={activeCard.firstMessage
-                    .replace(/\{\{char\}\}/gi, activeCard.name)
-                    .replace(/\{\{user\}\}/gi, data.config.userName || 'User')}
-                  messageId={0}
-                  depth={data.storyTurns?.length ?? 0}
-                  regexScripts={data.activeDisplayRegexScripts ?? []}
-                  enableRegex={enableRegexBeautify}
-                  unknownTagMode={unknownTagMode}
-                  charName={activeCard.name}
-                  userName={data.config.userName || 'User'}
-                  statData={data.statData ?? {}}
-                  storyTurns={data.storyTurns ?? []}
-                  onSendMessage={sendTextToChat}
-                  onSetInput={(txt) => {
-                    setComposerText(txt);
-                    setStatusMsg('已将选项填入下方输入框');
-                  }}
-                  onUpdateStatData={(nextStat) =>
-                    callTool('story_app_set_stat_data', { statData: nextStat })
-                  }
-                />
-              </div>
+            {hiddenTurnsCount > 0 && (
+              <button
+                className="load-more-floors-btn"
+                onClick={() => setExtraLoadedTurns((prev) => prev + turnsPerPage)}
+              >
+                ↑ 点击加载更早的 {Math.min(visibleFloorLimit, hiddenTurnsCount * 2)} 楼（还有 {hiddenTurnsCount * 2} 楼未显示）
+              </button>
             )}
 
-            {(data.storyTurns ?? []).map((t, idx, arr) => {
+            {hiddenTurnsCount === 0 && activeCard && (activeCard.allGreetings?.[activeCard.activeGreetingIndex ?? 0] || activeCard.firstMessage) && (() => {
+              const allGreetings = activeCard.allGreetings && activeCard.allGreetings.length > 0
+                ? activeCard.allGreetings
+                : [activeCard.firstMessage];
+              const gIdx = Math.max(0, Math.min(allGreetings.length - 1, activeCard.activeGreetingIndex ?? 0));
+              const currentOpening = allGreetings[gIdx] || activeCard.firstMessage;
+              const selectGreeting = async (targetIdx: number) => {
+                const wrapped = ((targetIdx % allGreetings.length) + allGreetings.length) % allGreetings.length;
+                setJumpingGreeting(false);
+                setEditingOpening(false);
+                await callTool('story_app_select_greeting', { index: wrapped });
+                setStatusMsg(`已切换至第 ${wrapped + 1}/${allGreetings.length} 个开场白`);
+              };
+              return (
+                <div className="story-paper">
+                  <div className="row">
+                    <span className="muted">#0 · 开场白 · {activeCard.name}</span>
+                    <div className="floor-actions floor-actions-visible">
+                      <span className="badge">
+                        {allGreetings.length > 1 ? `Opening ${gIdx + 1}/${allGreetings.length}` : 'Opening'}
+                      </span>
+                      {!editingOpening ? (
+                        <button
+                          className="pencil-btn"
+                          title="编辑本层开场白正文"
+                          onClick={() => {
+                            setEditingOpening(true);
+                            setEditingOpeningDraft(currentOpening);
+                          }}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                            <path d="m15 5 4 4" />
+                          </svg>
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            className="btn btn-xs btn-primary"
+                            onClick={async () => {
+                              await callTool('story_app_edit_greeting', {
+                                index: gIdx,
+                                content: editingOpeningDraft,
+                              });
+                              setEditingOpening(false);
+                              setStatusMsg('已保存开场白修改');
+                            }}
+                          >
+                            保存
+                          </button>
+                          <button
+                            className="btn btn-xs"
+                            onClick={() => setEditingOpening(false)}
+                          >
+                            取消
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  {editingOpening ? (
+                    <textarea
+                      className="textarea"
+                      style={{ minHeight: 140 }}
+                      value={editingOpeningDraft}
+                      onChange={(e) => setEditingOpeningDraft(e.target.value)}
+                    />
+                  ) : (
+                    <FloorRenderer
+                      key={`opening-${activeCard.id}-${gIdx}`}
+                      narrative={currentOpening
+                        .replace(/\{\{char\}\}/gi, activeCard.name)
+                        .replace(/\{\{user\}\}/gi, data.config.userName || 'User')}
+                      messageId={0}
+                      depth={allStoryTurns.length}
+                      regexScripts={data.activeDisplayRegexScripts ?? []}
+                      enableRegex={enableRegexBeautify}
+                      unknownTagMode={unknownTagMode}
+                      charName={activeCard.name}
+                      userName={data.config.userName || 'User'}
+                      statData={data.statData ?? {}}
+                      storyTurns={allStoryTurns}
+                      greetings={allGreetings}
+                      activeGreetingIndex={gIdx}
+                      onSendMessage={sendTextToChat}
+                      onSetInput={(txt) => {
+                        setComposerText(txt);
+                        setStatusMsg('已将选项填入下方输入框');
+                      }}
+                      onUpdateStatData={(nextStat) =>
+                        callTool('story_app_set_stat_data', { statData: nextStat })
+                      }
+                      onSelectGreeting={selectGreeting}
+                    />
+                  )}
+                  {allGreetings.length > 1 && (
+                    <div className="greeting-swipe-bar">
+                      <button
+                        className="btn btn-xs"
+                        title="上一个开场白"
+                        onClick={() => selectGreeting(gIdx - 1)}
+                      >
+                        ‹
+                      </button>
+                      {jumpingGreeting ? (
+                        <form
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            const n = parseInt(jumpGreetingInput, 10);
+                            if (Number.isFinite(n) && n >= 1 && n <= allGreetings.length) {
+                              selectGreeting(n - 1);
+                            } else {
+                              setJumpingGreeting(false);
+                            }
+                          }}
+                        >
+                          <input
+                            type="number"
+                            className="input"
+                            style={{ width: 54, height: 22, padding: '1px 5px', fontSize: 11, textAlign: 'center' }}
+                            min={1}
+                            max={allGreetings.length}
+                            autoFocus
+                            value={jumpGreetingInput}
+                            onChange={(e) => setJumpGreetingInput(e.target.value)}
+                            onBlur={() => setJumpingGreeting(false)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Escape') setJumpingGreeting(false);
+                            }}
+                          />
+                          <span className="muted">/ {allGreetings.length}</span>
+                        </form>
+                      ) : (
+                        <button
+                          className="greeting-counter-btn"
+                          title="点击输入序号直接跳转到指定开场白"
+                          onClick={() => {
+                            setJumpGreetingInput(String(gIdx + 1));
+                            setJumpingGreeting(true);
+                          }}
+                        >
+                          {gIdx + 1}/{allGreetings.length}
+                        </button>
+                      )}
+                      <button
+                        className="btn btn-xs"
+                        title="下一个开场白"
+                        onClick={() => selectGreeting(gIdx + 1)}
+                      >
+                        ›
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {visibleStoryTurns.map((t, idx, arr) => {
               const isEditing = editingTurnId === t.turnId;
               const depth = arr.length - 1 - idx;
               return (
@@ -828,31 +985,43 @@ export function AppView() {
                         #{t.index} · {activeCard?.name ?? '角色'}
                         {t.statsSnapshot?.location ? ` · ${t.statsSnapshot.location}` : ''}
                       </span>
-                      <div className="floor-actions">
+                      <div className="floor-actions floor-actions-visible">
                         {!isEditing ? (
                           <button
-                            className="btn btn-xs"
+                            className="pencil-btn"
+                            title="编辑本层正文"
                             onClick={() => {
                               setEditingTurnId(t.turnId);
                               setEditingDraft(t.narrative);
                             }}
                           >
-                            编辑
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                              <path d="m15 5 4 4" />
+                            </svg>
                           </button>
                         ) : (
-                          <button
-                            className="btn btn-xs btn-primary"
-                            onClick={async () => {
-                              await callTool('story_app_edit_turn', {
-                                turnId: t.turnId,
-                                narrative: editingDraft,
-                              });
-                              setEditingTurnId(null);
-                              setStatusMsg(`已保存第 #${t.index} 楼修改`);
-                            }}
-                          >
-                            保存
-                          </button>
+                          <>
+                            <button
+                              className="btn btn-xs btn-primary"
+                              onClick={async () => {
+                                await callTool('story_app_edit_turn', {
+                                  turnId: t.turnId,
+                                  narrative: editingDraft,
+                                });
+                                setEditingTurnId(null);
+                                setStatusMsg(`已保存第 #${t.index} 楼修改`);
+                              }}
+                            >
+                              保存
+                            </button>
+                            <button
+                              className="btn btn-xs"
+                              onClick={() => setEditingTurnId(null)}
+                            >
+                              取消
+                            </button>
+                          </>
                         )}
                         <button
                           className="btn btn-xs"
@@ -1950,6 +2119,23 @@ export function AppView() {
                     <option value="keep">原样保留</option>
                     <option value="hide">静默隐藏</option>
                   </select>
+                </div>
+                <div className="row">
+                  <span className="muted">默认渲染最近楼层数（点击顶部按此步长加载更早楼层）</span>
+                  <input
+                    type="number"
+                    className="input"
+                    style={{ width: 72 }}
+                    min={2}
+                    max={200}
+                    step={2}
+                    value={visibleFloorLimit}
+                    onChange={(e) =>
+                      callTool('story_app_update_config', {
+                        visibleFloorLimit: Math.max(2, Math.min(200, Number(e.target.value) || 10)),
+                      })
+                    }
+                  />
                 </div>
                 <div className="row">
                   <span className="muted">世界书触发冷却回合（0 = 每次命中均触发）</span>

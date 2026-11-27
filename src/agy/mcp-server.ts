@@ -45,7 +45,15 @@ function collectDynamicResourceDomains(): string[] {
   ]);
   for (const card of storage.listCards()) {
     for (const o of card.resourceOrigins ?? []) {
-      origins.add(o);
+      if (!o || o.includes('..')) continue;
+      try {
+        const u = new URL(o);
+        if ((u.protocol === 'https:' || u.protocol === 'http:') && u.hostname.includes('.') && !/^\.|\.$/.test(u.hostname)) {
+          origins.add(u.origin);
+        }
+      } catch {
+        // skip invalid origin
+      }
     }
   }
   return Array.from(origins);
@@ -55,9 +63,16 @@ function isHtmlBeautifyRegex(replaceString: string): boolean {
   return /<!doctype|<html|<style|<div|<script/i.test(replaceString);
 }
 
-function initCardMvuIfEmpty(card: CharacterCard, userName: string): Record<string, unknown> {
+function initCardMvuIfEmpty(card: CharacterCard, userName: string, greetingIndex = 0): Record<string, unknown> {
   const books = card.embeddedLorebook ? [card.embeddedLorebook] : [];
-  return extractInitVarFromLorebooks(books, userName) ?? {};
+  const base = extractInitVarFromLorebooks(books, userName) ?? {};
+  const allGreetings = [card.firstMessage, ...(card.alternateGreetings ?? [])];
+  const clamped = Math.max(0, Math.min(Math.max(0, allGreetings.length - 1), greetingIndex));
+  const selectedGreeting = allGreetings[clamped] ?? '';
+  if (selectedGreeting && /<update(?:variable)?>/i.test(selectedGreeting)) {
+    return applyMvuUpdates(base, selectedGreeting).statData;
+  }
+  return base;
 }
 
 function getActiveStoryKey(config: TavernConfig): string {
@@ -76,7 +91,8 @@ function syncSessionToStoryKey(config: TavernConfig, storyKey: string): void {
     session.statData = lastTurnWithStat.statData;
   } else if (config.activeCardId) {
     const card = storage.getCard(config.activeCardId);
-    session.statData = card ? initCardMvuIfEmpty(card, config.userName || 'User') : {};
+    const greetingIdx = config.activeGreetingIndices?.[storyKey] ?? 0;
+    session.statData = card ? initCardMvuIfEmpty(card, config.userName || 'User', greetingIdx) : {};
   } else {
     session.statData = {};
   }
@@ -131,6 +147,11 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
           remainingAvatarBudget = Math.max(0, remainingAvatarBudget - c.avatarDataUrl.length);
         }
       }
+      const allGreetings = isActiveCard ? [c.firstMessage, ...(c.alternateGreetings ?? [])] : undefined;
+      const rawGreetingIdx = isActiveCard ? (config.activeGreetingIndices?.[storyKey] ?? 0) : 0;
+      const activeGreetingIndex = allGreetings
+        ? Math.max(0, Math.min(allGreetings.length - 1, rawGreetingIdx))
+        : 0;
       return {
         id: c.id,
         name: c.name,
@@ -138,6 +159,8 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
         personality: '',
         scenario: c.scenario.slice(0, 120),
         firstMessage: isActiveCard ? c.firstMessage : '',
+        allGreetings,
+        activeGreetingIndex,
         tags: c.tags,
         avatarDataUrl,
         hasEmbeddedLorebook: Boolean(c.embeddedLorebook),
@@ -233,7 +256,7 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
     sessionState: session.state,
     statData: session.statData ?? {},
     latestOptions: session.latestOptions,
-    storyTurns: storyTurns.slice(-50),
+    storyTurns: storyTurns.slice(-200),
     chatSlots,
     activeChatSlot,
     dataDir: storage.rootDir,
@@ -267,6 +290,14 @@ server.resource(
         uri: APP_URI,
         mimeType: 'text/html;profile=mcp-app',
         text: loadAppHtml(),
+        _meta: {
+          ui: {
+            prefersBorder: false,
+            csp: {
+              resourceDomains: collectDynamicResourceDomains(),
+            },
+          },
+        },
       },
     ],
   }),
@@ -1032,6 +1063,7 @@ server.registerTool(
       unknownTagMode: z.enum(['fold', 'keep', 'hide']).optional(),
       authorsNote: z.string().optional(),
       authorsNoteEnabled: z.boolean().optional(),
+      visibleFloorLimit: z.number().int().min(2).max(200).optional(),
     },
     _meta: APP_ONLY_META,
   },
@@ -1052,6 +1084,82 @@ server.registerTool(
     }
     return {
       content: [{ type: 'text', text: 'config updated' }],
+      structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'story_app_select_greeting',
+  {
+    title: 'Select Opening Greeting (Alternate Greetings)',
+    description: 'Switch the active opening greeting index (0 = first_mes, 1..N = alternate_greetings) for the current card/slot.',
+    inputSchema: {
+      index: z.number().int().min(0),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ index }) => {
+    const config = storage.getConfig();
+    if (!config.activeCardId) {
+      return {
+        content: [{ type: 'text', text: 'no active card' }],
+        structuredContent: buildBootstrapPayload(),
+      };
+    }
+    const card = storage.getCard(config.activeCardId);
+    const total = card ? 1 + (card.alternateGreetings?.length ?? 0) : 1;
+    const clamped = Math.max(0, Math.min(total - 1, index));
+    const storyKey = getActiveStoryKey(config);
+    const nextConfig = storage.saveConfig({
+      activeGreetingIndices: {
+        ...(config.activeGreetingIndices ?? {}),
+        [storyKey]: clamped,
+      },
+    });
+    // When no turns have been committed yet, re-initialize MVU stat_data with this opening's embedded <update> patch
+    if (storyLog.readTurns(storyKey).length === 0) {
+      syncSessionToStoryKey(nextConfig, storyKey);
+    }
+    return {
+      content: [{ type: 'text', text: `selected greeting ${clamped + 1}/${total}` }],
+      structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'story_app_edit_greeting',
+  {
+    title: 'Edit Active Opening Greeting Content',
+    description: 'Edit the text of the currently selected opening greeting (firstMessage or alternateGreeting) on the active card.',
+    inputSchema: {
+      index: z.number().int().min(0),
+      content: z.string(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ index, content }) => {
+    const config = storage.getConfig();
+    if (!config.activeCardId) {
+      throw new Error('No active character card');
+    }
+    const card = storage.getCard(config.activeCardId);
+    if (!card) {
+      throw new Error(`Card not found: ${config.activeCardId}`);
+    }
+    if (index === 0) {
+      card.firstMessage = content;
+    } else {
+      const alts = [...(card.alternateGreetings ?? [])];
+      if (index - 1 >= 0 && index - 1 < alts.length) {
+        alts[index - 1] = content;
+        card.alternateGreetings = alts;
+      }
+    }
+    storage.saveCard(card);
+    return {
+      content: [{ type: 'text', text: `edited greeting #${index}` }],
       structuredContent: buildBootstrapPayload(),
     };
   },
