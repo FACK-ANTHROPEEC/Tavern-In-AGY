@@ -89,9 +89,14 @@ export function handlePreInvocation(
     return {};
   }
 
-  // Per-conversation isolation: only conversations explicitly bound via `/rp` run RP hooks.
+  // Per-conversation isolation: only conversations explicitly bound via `/rp` (or a freshly forked branch / stateless turn) run RP hooks.
   // Normal AGY coding/Q&A windows remain 100% untouched even while the global switch is enabled.
-  if (!session.rpModeActive) {
+  const pendingForkPeek = storage.peekPendingFork();
+  if (!session.rpModeActive && pendingForkPeek && pendingForkPeek.cardId === card.id) {
+    session.rpModeActive = true;
+    storage.saveSession(session);
+  }
+  if (!session.rpModeActive && (config.directorMode || !config.statelessPerTurn)) {
     return {};
   }
 
@@ -172,6 +177,9 @@ export function handlePreInvocation(
         lastUserInput,
       )
     ) {
+      session.lastUserInputHash = inputHash;
+      session.lastDispatchedUserStep = currentUserStepStamp ?? undefined;
+      storage.saveSession(session);
       return {
         injectSteps: [
           {
@@ -217,6 +225,13 @@ export function handlePreInvocation(
         },
       ],
     };
+  }
+
+  // Non-director same-turn deduplication via transcript USER_INPUT step stamp
+  // prevents a 2nd PreInvocation injection right after story_commit_turn returns within the same user turn.
+  const nonDirectorUserStep = readLastUserInputStamp(payload.transcriptPath);
+  if (nonDirectorUserStep && session.lastDispatchedUserStep === nonDirectorUserStep) {
+    return {};
   }
 
   const preset = config.activePresetId ? storage.getPreset(config.activePresetId) : null;
@@ -315,6 +330,7 @@ export function handlePreInvocation(
 
   session.turnCount += 1;
   session.lastUserInputHash = inputHash;
+  session.lastDispatchedUserStep = nonDirectorUserStep ?? undefined;
   session.recentMessages = nextRecent;
   session.variables = bundle.variables;
   for (const key of bundle.triggeredLorebookKeys) {

@@ -192,6 +192,7 @@ export function AppView() {
   const [extraLoadedTurns, setExtraLoadedTurns] = useState<number>(0);
   const [composerText, setComposerText] = useState<string>('');
   const [pendingSend, setPendingSend] = useState<string | null>(null);
+  const sendingRef = useRef<boolean>(false);
   const pendingBaseLastTurnIdRef = useRef<string | null>(null);
   const [cardFrontend, setCardFrontend] = useState<CardFrontendPayload | null>(null);
   const [mvuSchemaCount, setMvuSchemaCount] = useState<number>(0);
@@ -468,14 +469,16 @@ export function AppView() {
 
   async function sendTextToChat(rawText: string) {
     const text = rawText.trim();
-    if (!text) return;
+    if (!text || sendingRef.current) return;
     const app = appRef.current;
     if (!app || !canMessage) {
       setStatusMsg('左侧尚未建立对话：请先在左侧发送第一句，再重开或刷新此面板以启用直聊。');
       return;
     }
+    sendingRef.current = true;
     const useDirector = Boolean(data?.config.directorMode);
     const useStateless = !useDirector && Boolean(data?.config.statelessPerTurn);
+    composerTextRef.current = '';
     setComposerText('');
     const currentTurns = data?.storyTurns ?? [];
     pendingBaseLastTurnIdRef.current = currentTurns[currentTurns.length - 1]?.turnId ?? null;
@@ -516,7 +519,11 @@ export function AppView() {
       await app.sendMessage(payload);
     } catch (err) {
       setPendingSend(null);
+      composerTextRef.current = text;
+      setComposerText(text);
       setStatusMsg(`发送失败: ${String(err)}`);
+    } finally {
+      sendingRef.current = false;
     }
   }
 
@@ -756,7 +763,7 @@ export function AppView() {
   return (
     <div className="app-shell" style={shellStyle}>
       <MvuZodRuntimeHost
-        frontend={cardFrontend}
+        frontend={cardFrontend && activeCard && cardFrontend.cardId === activeCard.id ? cardFrontend : null}
         statData={data.statData ?? {}}
         userName={data.config.userName || 'User'}
         storyTurns={data.storyTurns ?? []}
@@ -905,12 +912,14 @@ export function AppView() {
                           <button
                             className="btn btn-xs btn-primary"
                             onClick={async () => {
-                              await callTool('story_app_edit_greeting', {
+                              const ok = await callTool('story_app_edit_greeting', {
                                 index: gIdx,
                                 content: editingOpeningDraft,
                               });
-                              setEditingOpening(false);
-                              setStatusMsg('已保存开场白修改');
+                              if (ok) {
+                                setEditingOpening(false);
+                                setStatusMsg('已保存开场白修改');
+                              }
                             }}
                           >
                             保存
@@ -1060,12 +1069,14 @@ export function AppView() {
                             <button
                               className="btn btn-xs btn-primary"
                               onClick={async () => {
-                                await callTool('story_app_edit_turn', {
+                                const ok = await callTool('story_app_edit_turn', {
                                   turnId: t.turnId,
                                   narrative: editingDraft,
                                 });
-                                setEditingTurnId(null);
-                                setStatusMsg(`已保存第 #${t.index} 楼修改`);
+                                if (ok) {
+                                  setEditingTurnId(null);
+                                  setStatusMsg(`已保存第 #${t.index} 楼修改`);
+                                }
                               }}
                             >
                               保存
@@ -1177,7 +1188,7 @@ export function AppView() {
                   setComposerText(e.target.value);
                 }}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                     e.preventDefault();
                     sendTextToChat(composerTextRef.current);
                   }
@@ -1725,14 +1736,16 @@ export function AppView() {
                                         <button
                                           className="btn btn-xs btn-primary"
                                           onClick={async () => {
-                                            await callTool('story_app_edit_preset_prompt', {
+                                            const ok = await callTool('story_app_edit_preset_prompt', {
                                               presetId: activePreset.id,
                                               identifier: item.identifier,
                                               content: editingPromptContent,
                                               role: editingPromptRole,
                                             });
-                                            setEditingPromptId(null);
-                                            setStatusMsg(`已保存预设条目「${item.name}」`);
+                                            if (ok) {
+                                              setEditingPromptId(null);
+                                              setStatusMsg(`已保存预设条目「${item.name}」`);
+                                            }
                                           }}
                                         >
                                           保存条目
@@ -2095,12 +2108,14 @@ export function AppView() {
                                     <button
                                       className="btn btn-xs btn-primary"
                                       onClick={async () => {
-                                        await callTool('story_app_edit_turn_summary', {
+                                        const ok = await callTool('story_app_edit_turn_summary', {
                                           turnId: t.turnId,
                                           memorySummary: editingSummaryDraft,
                                         });
-                                        setEditingSummaryTurnId(null);
-                                        setStatusMsg(`已保存第 #${t.index} 楼记忆摘要`);
+                                        if (ok) {
+                                          setEditingSummaryTurnId(null);
+                                          setStatusMsg(`已保存第 #${t.index} 楼记忆摘要`);
+                                        }
                                       }}
                                     >
                                       保存
@@ -2183,15 +2198,24 @@ export function AppView() {
                         onClick={async () => {
                           const app = appRef.current;
                           if (!app) return;
+                          const requestedCardId = activeCard.id;
                           setStatusMsg('正在加载角色卡前端资源...');
-                          const res = await app.callServerTool({
-                            name: 'story_app_get_card_frontend',
-                            arguments: { cardId: activeCard.id },
-                          });
-                          const sc = res?.structuredContent as CardFrontendPayload | undefined;
-                          if (sc) {
-                            setCardFrontend(sc);
-                            setStatusMsg('角色卡前端资源已就绪');
+                          try {
+                            const res = await app.callServerTool({
+                              name: 'story_app_get_card_frontend',
+                              arguments: { cardId: requestedCardId },
+                            });
+                            if (res?.isError) {
+                              setStatusMsg('加载角色卡前端资源失败');
+                              return;
+                            }
+                            const sc = res?.structuredContent as CardFrontendPayload | undefined;
+                            if (sc && sc.cardId === requestedCardId) {
+                              setCardFrontend(sc);
+                              setStatusMsg('角色卡前端资源已就绪');
+                            }
+                          } catch (err) {
+                            setStatusMsg(`加载前端资源失败: ${String(err)}`);
                           }
                         }}
                       >

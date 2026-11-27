@@ -53,43 +53,53 @@ export function handleSessionStart(
     session.statData = { ...(shared.statData ?? {}) };
   }
 
-  // In Director Mode, the main window opens BEFORE any user message is sent,
-  // so pendingDirectorInput/stagedSidePaneInput is absent -> return {} (0 bytes) to keep the director's mind 100% clean.
-  // Only the freshly spawned story-writer subagent (within 5 min) consumes it and receives the full context.
-  const hasFreshStagedInput =
-    Boolean(shared.stagedSidePaneInput) &&
-    Date.now() - (shared.stagedSidePaneInputAt ?? 0) <= 300_000;
+  // In Director Mode, only the freshly spawned story-writer subagent unlocks when PreInvocation
+  // (after verifying rpModeActive) has promoted pendingDirectorInput within the last 5 minutes.
+  // Unrelated windows or subagents never unlock from stagedSidePaneInput alone.
   const hasFreshDirectorInput =
-    hasFreshStagedInput ||
-    (Boolean(shared.pendingDirectorInput) &&
-      Date.now() - (shared.pendingDirectorInputAt ?? 0) <= 300_000);
+    Boolean(shared.pendingDirectorInput) &&
+    Date.now() - (shared.pendingDirectorInputAt ?? 0) <= 300_000;
+  const pendingForkPeek = storage.peekPendingFork();
+  const hasMatchingPendingFork = Boolean(pendingForkPeek && pendingForkPeek.cardId === card.id);
 
   if (config.directorMode) {
     if (!hasFreshDirectorInput) {
-      if (shared.pendingDirectorInput || shared.stagedSidePaneInput) {
+      if (shared.pendingDirectorInput) {
         shared.pendingDirectorInput = undefined;
         shared.pendingDirectorInputAt = undefined;
-        shared.stagedSidePaneInput = undefined;
-        shared.stagedSidePaneInputAt = undefined;
         storage.saveSession(shared);
+      }
+      // If the user just clicked "Fork Branch" into a new conversation, bind this window to RP mode
+      // so the first message in the forked window dispatches normally.
+      if (hasMatchingPendingFork && !session.rpModeActive) {
+        session.rpModeActive = true;
+        storage.saveSession(session);
       }
       return {};
     }
-    pendingDirectorInput = hasFreshStagedInput
-      ? shared.stagedSidePaneInput!
-      : shared.pendingDirectorInput!;
+    pendingDirectorInput = shared.pendingDirectorInput!;
     shared.pendingDirectorInput = undefined;
     shared.pendingDirectorInputAt = undefined;
     shared.stagedSidePaneInput = undefined;
     shared.stagedSidePaneInputAt = undefined;
     storage.saveSession(shared);
     session.isWriterSubagent = true;
-  } else if (shared.pendingDirectorInput || shared.stagedSidePaneInput) {
-    shared.pendingDirectorInput = undefined;
-    shared.pendingDirectorInputAt = undefined;
-    shared.stagedSidePaneInput = undefined;
-    shared.stagedSidePaneInputAt = undefined;
-    storage.saveSession(shared);
+  } else {
+    if (shared.pendingDirectorInput || shared.stagedSidePaneInput) {
+      shared.pendingDirectorInput = undefined;
+      shared.pendingDirectorInputAt = undefined;
+      shared.stagedSidePaneInput = undefined;
+      shared.stagedSidePaneInputAt = undefined;
+      storage.saveSession(shared);
+    }
+    // Non-director isolation: only inject into conversations bound via `/rp`, stateless per-turn mode,
+    // or a freshly forked story branch; normal coding windows stay 100% untouched.
+    if (hasMatchingPendingFork && !session.rpModeActive) {
+      session.rpModeActive = true;
+    }
+    if (!session.rpModeActive && !config.statelessPerTurn) {
+      return {};
+    }
   }
 
   // Always auto-resume existing story turns for the active card (or pending fork if staged)
@@ -156,6 +166,19 @@ export function handleSessionStart(
     session.lastPostHistoryTurn = session.turnCount + 1;
   }
   storage.saveSession(session);
+  // Sync newly initialized MVU statData (e.g. from external active lorebook [initvar]) back to shared 'default' store
+  // so story_commit_turn on turn #1 never wipes statData back to {}.
+  if (
+    convId !== 'default' &&
+    Object.keys(shared.statData ?? {}).length === 0 &&
+    Object.keys(bundle.statData ?? {}).length > 0
+  ) {
+    const latestShared = storage.getSession('default');
+    if (Object.keys(latestShared.statData ?? {}).length === 0) {
+      latestShared.statData = { ...bundle.statData };
+      storage.saveSession(latestShared);
+    }
+  }
 
   const fullSystemMessage = pendingDirectorInput
     ? `${bundle.systemMessage}\n\n---\n\n[Current Turn User Input]\n${pendingDirectorInput}`

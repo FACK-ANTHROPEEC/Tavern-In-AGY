@@ -279,7 +279,11 @@ export function foldUnknownCustomTags(
         return '';
       }
       const icon = pickTagIcon(normalized);
-      const safeBody = escapeHtmlText(trimmedInner).replace(/\n/g, '<br/>');
+      const restoredInner = trimmedInner.replace(
+        /\u0000TAVERN_PROTECTED_(\d+)\u0000/g,
+        (_m, idxStr: string) => placeholders[Number(idxStr)] ?? '',
+      );
+      const safeBody = escapeHtmlText(restoredInner).replace(/\n/g, '<br/>');
       return `\n<details><summary>${icon} ${escapeHtmlText(rawTag.replace(/~$/, ''))}</summary><div class="cot-body">${safeBody}</div></details>\n`;
     });
     if (!changed) break;
@@ -301,8 +305,8 @@ export function foldUnknownCustomTags(
  */
 export function sanitizeStaticHtml(html: string): string {
   return html
-    .replace(/<(script|iframe|object|embed)\b[\s\S]*?(?:<\/\1>|\/?>)/gi, '')
-    .replace(/<(iframe|object|embed)\b[^>]*>/gi, '')
+    .replace(/<(script|iframe|object|embed)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<(script|iframe|object|embed)\b[^>]*\/?>/gi, '')
     .replace(/[\s/]+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
     .replace(/(?:href|src|xlink:href|formaction|action)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi, (full, d?: string, s?: string, u?: string) => {
       const val = d ?? s ?? u ?? '';

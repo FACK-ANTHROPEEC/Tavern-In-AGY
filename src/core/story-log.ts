@@ -241,6 +241,13 @@ export class StoryLogStore {
       opts.maxTurns && opts.maxTurns > 0 ? turns.slice(-opts.maxTurns) : turns;
 
     const memCfg = resolveMemoryPluginConfig(opts.memoryPlugin);
+    const resumeMacroCtx = {
+      char: charName,
+      user: userName,
+      persona: '',
+      scenario: '',
+      vars: {} as Record<string, string>,
+    };
 
     // Memory plugin mode: older floors are compressed to per-turn summaries, latest N floors stay in full prose.
     if (memCfg.enabled) {
@@ -264,6 +271,7 @@ export class StoryLogStore {
                   placement: 1,
                   target: 'prompt',
                   depth: userDepth,
+                  macroCtx: resumeMacroCtx,
                 })
               : t.userMessage;
           parts.push(`\n### Turn ${t.index} (${userName})\n${userText}`);
@@ -275,6 +283,7 @@ export class StoryLogStore {
                 placement: 2,
                 target: 'prompt',
                 depth: aiDepth,
+                macroCtx: resumeMacroCtx,
               })
             : strippedNarrative;
         parts.push(`\n### Turn ${t.index} (${charName})\n${aiText}`);
@@ -370,6 +379,7 @@ export class StoryLogStore {
                 placement: 1,
                 target: 'prompt',
                 depth: userDepth,
+                macroCtx: resumeMacroCtx,
               })
             : t.userMessage;
         parts.push(`\n### Turn ${t.index} (${userName})\n${userText}`);
@@ -380,6 +390,7 @@ export class StoryLogStore {
               placement: 2,
               target: 'prompt',
               depth: aiDepth,
+              macroCtx: resumeMacroCtx,
             })
           : t.narrative;
       parts.push(`\n### Turn ${t.index} (${charName})\n${aiText}`);

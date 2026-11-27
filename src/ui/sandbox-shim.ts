@@ -482,7 +482,7 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
         } catch(e){}
       }
     }
-    return STAT;
+    return current;
   }
 
   const MVU_EVENTS = {

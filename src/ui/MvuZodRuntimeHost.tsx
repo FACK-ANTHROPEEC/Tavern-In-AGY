@@ -27,6 +27,7 @@ export function MvuZodRuntimeHost({
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const iframeLoadedRef = useRef<boolean>(false);
   const lastPushedJsonRef = useRef<string>('');
+  const bakedStatJsonRef = useRef<string>('');
   const latestStatDataRef = useRef<Record<string, unknown>>(statData ?? {});
   const widgetId = useMemo(() => `mvuzod-${Math.random().toString(36).slice(2, 9)}`, []);
 
@@ -49,6 +50,7 @@ export function MvuZodRuntimeHost({
 
   useEffect(() => {
     const onMessage = (evt: MessageEvent) => {
+      if (evt.source !== iframeRef.current?.contentWindow) return;
       const msg = evt.data;
       if (!msg || typeof msg !== 'object' || msg.widgetId !== widgetId) return;
       if (msg.type === 'tavern:schemaRegistered' && typeof msg.count === 'number') {
@@ -82,6 +84,7 @@ export function MvuZodRuntimeHost({
 
   const srcDoc = useMemo(() => {
     if (!frontend || enabledScripts.length === 0) return '';
+    bakedStatJsonRef.current = JSON.stringify(statData ?? {});
     const html = buildHelperScriptsStageHtml(enabledScripts);
     return buildSandboxedSrcDoc(html, {
       widgetId,
@@ -107,7 +110,9 @@ export function MvuZodRuntimeHost({
         iframeLoadedRef.current = true;
         const latest = latestStatDataRef.current;
         const curJson = JSON.stringify(latest ?? {});
-        if (curJson !== lastPushedJsonRef.current) {
+        // Only push statSync if state changed since srcDoc was baked; otherwise record baked baseline
+        // so stale onLoad snapshots never rebound over newer state.
+        if (curJson !== bakedStatJsonRef.current && curJson !== lastPushedJsonRef.current) {
           lastPushedJsonRef.current = curJson;
           try {
             iframeRef.current?.contentWindow?.postMessage(
@@ -117,6 +122,8 @@ export function MvuZodRuntimeHost({
           } catch {
             // ignore
           }
+        } else if (!lastPushedJsonRef.current) {
+          lastPushedJsonRef.current = curJson;
         }
       }}
       style={{ display: 'none', width: 0, height: 0, border: 0 }}

@@ -75,8 +75,13 @@ function isHtmlBeautifyRegex(replaceString: string): boolean {
   return /<!doctype|<html|<style|<div|<script/i.test(replaceString);
 }
 
-function initCardMvuIfEmpty(card: CharacterCard, userName: string, greetingIndex = 0): Record<string, unknown> {
-  const books = card.embeddedLorebook ? [card.embeddedLorebook] : [];
+function initCardMvuIfEmpty(
+  card: CharacterCard,
+  userName: string,
+  greetingIndex = 0,
+  extraLorebooks: Lorebook[] = [],
+): Record<string, unknown> {
+  const books = [...(card.embeddedLorebook ? [card.embeddedLorebook] : []), ...extraLorebooks];
   const base = extractInitVarFromLorebooks(books, userName, card.name) ?? {};
   const allGreetings = [card.firstMessage, ...(card.alternateGreetings ?? [])];
   const clamped = Math.max(0, Math.min(Math.max(0, allGreetings.length - 1), greetingIndex));
@@ -104,7 +109,12 @@ function syncSessionToStoryKey(config: TavernConfig, storyKey: string): void {
   } else if (config.activeCardId) {
     const card = storage.getCard(config.activeCardId);
     const greetingIdx = config.activeGreetingIndices?.[storyKey] ?? 0;
-    session.statData = card ? initCardMvuIfEmpty(card, config.userName || 'User', greetingIdx) : {};
+    const activeLorebooks = (config.activeLorebookIds ?? [])
+      .map((id) => storage.getLorebook(id))
+      .filter((b): b is Lorebook => b !== null);
+    session.statData = card
+      ? initCardMvuIfEmpty(card, config.userName || 'User', greetingIdx, activeLorebooks)
+      : {};
   } else {
     session.statData = {};
   }
@@ -268,7 +278,7 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean; slimForPanelOpen?
     sessionState: session.state,
     statData: session.statData ?? {},
     latestOptions: session.latestOptions,
-    storyTurns: storyTurns.slice(-200),
+    storyTurns: storyTurns.slice(-200).map(({ statData: _omitStat, ...slimTurn }) => slimTurn),
     chatSlots,
     activeChatSlot,
     dataDir: storage.rootDir,
@@ -482,7 +492,9 @@ server.registerTool(
       options: normalizedOptions.length > 0 ? normalizedOptions : undefined,
     });
 
-    // Return a slim delta payload (~1 KB instead of full bootstrap) to keep conversation trajectory lean
+    // Return a slim delta payload (~1 KB instead of full bootstrap) to keep conversation trajectory lean;
+    // omit per-turn statData snapshot from wire payload (already persisted to JSONL for rollback and returned once at top-level).
+    const { statData: _omitTurnStat, ...slimCommittedTurn } = turn;
     return {
       content: [
         {
@@ -492,7 +504,7 @@ server.registerTool(
       ],
       structuredContent: {
         delta: true,
-        committedTurn: turn,
+        committedTurn: slimCommittedTurn,
         sessionState: session.state,
         statData: session.statData ?? {},
         latestOptions: session.latestOptions,
@@ -511,11 +523,11 @@ server.registerTool(
       conversationId: z.string().optional(),
     },
   },
-  async ({ conversationId }) => {
+  async () => {
     const config = storage.getConfig();
     const card = config.activeCardId ? storage.getCard(config.activeCardId) : null;
     const preset = config.activePresetId ? storage.getPreset(config.activePresetId) : null;
-    const session = storage.getSession(conversationId || DEFAULT_SESSION_ID);
+    const session = storage.getSession(DEFAULT_SESSION_ID);
     const data = {
       enabled: config.enabled,
       activeCard: card ? { id: card.id, name: card.name, scenario: card.scenario } : null,
@@ -631,9 +643,9 @@ server.registerTool(
       conversationId: z.string().optional(),
     },
   },
-  async ({ title, summary, conversationId }) => {
+  async ({ title, summary }) => {
     const config = storage.getConfig();
-    const session = storage.getSession(conversationId || DEFAULT_SESSION_ID);
+    const session = storage.getSession(DEFAULT_SESSION_ID);
     if (summary) {
       session.state.summary = summary;
       storage.saveSession(session);
@@ -1482,15 +1494,10 @@ server.registerTool(
     const trimmed = text.trim();
     const now = Date.now();
     const session = storage.getSession(DEFAULT_SESSION_ID);
+    // Stage ONLY into stagedSidePaneInput (never pendingDirectorInput directly) so unbound / failed sends
+    // can never hijack unrelated sessions or subagents; PreInvocation promotes it only after verifying rpModeActive.
     session.stagedSidePaneInput = trimmed || undefined;
     session.stagedSidePaneInputAt = trimmed ? now : undefined;
-    if (trimmed) {
-      // Write directly to the writer handoff fields so PreInvocation never needs to relay or overwrite them
-      session.pendingDirectorInput = trimmed;
-      session.pendingDirectorInputAt = now;
-      session.lastUserInputForCommit = trimmed;
-      session.directorCommittedAt = undefined;
-    }
     storage.saveSession(session);
     return {
       content: [{ type: 'text', text: 'staged' }],

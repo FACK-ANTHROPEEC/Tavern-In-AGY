@@ -88,11 +88,12 @@ export function parsePresetJson(
     ordered.push(toItem(p, Boolean(entry.enabled)));
   }
 
-  // Append any prompts not referenced in prompt_order so nothing is lost
+  // Append any prompts not referenced in prompt_order so nothing is lost.
+  // When a prompt_order exists, unreferenced prompts are disabled by default (matching SillyTavern semantics).
   for (const p of rawPrompts) {
     const ident = typeof p.identifier === 'string' ? p.identifier : '';
     if (!ident || seen.has(ident)) continue;
-    ordered.push(toItem(p));
+    ordered.push(toItem(p, orderEntries.length > 0 ? false : undefined));
   }
 
   // Fallback for legacy / simplified presets without `prompts` array

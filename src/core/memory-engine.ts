@@ -80,9 +80,11 @@ export function extractMemorySummary(text: string): ExtractedMemorySummary {
     return { summary: lastOwnMatch, strippedText, matchedTag: 'memory_summary' };
   }
 
+  const withoutDetails = text.replace(/<details\b[^>]*>[\s\S]*?<\/details>/gi, '');
   for (const { tag, re } of COMPAT_SUMMARY_RES) {
+    const scanTarget = tag === 'summary' ? withoutDetails : text;
     let lastCompat = '';
-    for (const m of text.matchAll(re)) {
+    for (const m of scanTarget.matchAll(re)) {
       const inner = (m[1] ?? '').trim();
       if (inner) lastCompat = inner;
     }

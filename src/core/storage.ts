@@ -245,6 +245,10 @@ export class TavernStorage {
     writeJsonAtomic(this.subPath('pending-fork.json'), fork);
   }
 
+  peekPendingFork(): PendingForkContext | null {
+    return readJsonSafe<PendingForkContext>(this.subPath('pending-fork.json'));
+  }
+
   consumePendingFork(): PendingForkContext | null {
     const p = this.subPath('pending-fork.json');
     const data = readJsonSafe<PendingForkContext>(p);

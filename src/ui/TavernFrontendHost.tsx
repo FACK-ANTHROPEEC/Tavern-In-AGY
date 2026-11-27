@@ -54,6 +54,7 @@ export function TavernFrontendHost({
 
   useEffect(() => {
     const onMessage = (evt: MessageEvent) => {
+      if (evt.source !== iframeRef.current?.contentWindow) return;
       const msg = evt.data;
       if (!msg || typeof msg !== 'object' || msg.widgetId !== widgetId) return;
       if (msg.type === 'tavern:resize' && typeof msg.height === 'number') {
