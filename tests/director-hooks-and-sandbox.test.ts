@@ -68,17 +68,22 @@ describe('Director Mode multi-agent hook lifecycle', () => {
         storage,
       );
       expect(dirPre1.injectSteps?.length).toBe(1);
-      expect(dirPre1.injectSteps?.[0].systemMessage.systemMessage).toContain('[Story Director]');
+      expect(dirPre1.injectSteps?.[0].systemMessage.systemMessage).toContain('[Story Director · Pure Router]');
       expect(storage.getSession('default').directorTurnState).toBe('dispatched');
       expect(storage.getSession('default').pendingDirectorInput).toBe('继续');
 
-      // 3. story-writer subagent spawns -> SessionStart consumes pendingDirectorInput and marks isWriterSubagent
+      // 3. story-writer subagent spawns -> SessionStart consumes pendingDirectorInput, injects [Current Turn User Input], and marks isWriterSubagent
       const writerStart = handleSessionStart({ conversationId: 'writer-conv-1' }, storage);
       expect((writerStart.injectSteps?.length ?? 0)).toBeGreaterThan(0);
+      const writerInjectedText = (writerStart.injectSteps ?? [])
+        .map((s) => s.systemMessage.systemMessage)
+        .join('\n');
+      expect(writerInjectedText).toContain('[Current Turn User Input]');
+      expect(writerInjectedText).toContain('继续');
       expect(storage.getSession('writer-conv-1').isWriterSubagent).toBe(true);
       expect(storage.getSession('default').pendingDirectorInput).toBeUndefined();
 
-      // 4. [BUG 1] story-writer triggers PreInvocation -> MUST return {} and NOT inject [Story Director] or overwrite shared state
+      // 4. [BUG 1] story-writer triggers PreInvocation -> MUST return {} and NOT inject [Story Director · Pure Router] or overwrite shared state
       const writerPre = handlePreInvocation(
         { conversationId: 'writer-conv-1', lastUserInput: 'Write turn #1 for 继续', invocationNum: 1 },
         storage,
@@ -107,7 +112,7 @@ describe('Director Mode multi-agent hook lifecycle', () => {
         storage,
       );
       expect(dirNextTurn.injectSteps?.length).toBe(1);
-      expect(dirNextTurn.injectSteps?.[0].systemMessage.systemMessage).toContain('[Story Director]');
+      expect(dirNextTurn.injectSteps?.[0].systemMessage.systemMessage).toContain('[Story Director · Pure Router]');
 
       // 8. Abnormal writer exit (claimed pendingDirectorInput in SessionStart, failed before story_commit_turn) -> wakeup still resets & stops loop
       handleSessionStart({ conversationId: 'writer-conv-2' }, storage);

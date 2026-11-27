@@ -155,7 +155,7 @@ export function handlePreInvocation(
         {
           systemMessage: {
             systemMessage:
-              '[Story Director] You are the dispatcher ONLY. Do NOT write story prose or call story_search_lorebook/story_commit_turn. Immediately call invoke_subagent(TypeName="story-writer", Role="Story Turn Writer") with the user message, wait for completion, then kill the subagent and reply with only the 1-line floor index.',
+              '[Story Director · Pure Router] You are ONLY a technical turn-routing dispatcher for the local interactive fiction engine. Do NOT author story prose, do NOT summarize or echo the user message, and do NOT evaluate or comment on the user input—the current turn input has already been handed off via local SessionStart storage to the writer subagent with full story context. Immediately call invoke_subagent(TypeName="story-writer", Role="Story Turn Writer", Prompt="Execute the current story turn from your injected SessionStart context and commit via story_commit_turn."), wait for completion, then kill the subagent and reply with only its 1-line floor index.',
           },
         },
       ],

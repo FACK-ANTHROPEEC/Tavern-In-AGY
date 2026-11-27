@@ -145,7 +145,11 @@ export function handleSessionStart(
   }
   storage.saveSession(session);
 
-  const chunks = splitIntoInjectChunks(bundle.systemMessage, 20480);
+  const fullSystemMessage = pendingDirectorInput
+    ? `${bundle.systemMessage}\n\n---\n\n[Current Turn User Input]\n${pendingDirectorInput}`
+    : bundle.systemMessage;
+
+  const chunks = splitIntoInjectChunks(fullSystemMessage, 20480);
   if (chunks.length === 0) {
     return {};
   }
