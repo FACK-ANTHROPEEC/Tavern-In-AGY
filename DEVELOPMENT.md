@@ -1,6 +1,6 @@
 # TavernInAGY 开发与维护手册 (`DEVELOPMENT.md`)
 
-> **当前版本**：`v0.7.3`（单窗口导演模式默认开启 + 真·通用无硬编码渲染管线 + `story_*` 中性去词 + 无损多周目存档 + 公开 `README.md` / MIT 协议，Git 标签 `v0.1.0` → `v0.7.3`）
+> **当前版本**：`v0.7.4`（单窗口导演模式默认开启 + 20 KB 分块/15 万上下文动态预算 + 真·通用无硬编码渲染管线 + `story_*` 中性去词 + 无损多周目存档 + 公开 `README.md` / Apache-2.0 协议，Git 标签 `v0.1.0` → `v0.7.4`）
 > **定位**：基于 Antigravity 官方原生扩展体系（MCP Apps SEP-1865 + Local MCP Server + Lifecycle Hooks + Skill + Custom Agents）打造的本地互动小说与角色扮演创作侧边栏插件。
 > **合规底线**：100% 官方公开扩展路径，零反代、零 OAuth 凭据抽取、零无人自动循环（不使用 `Stop`/`PostInvocation` 续跑，无自动发送），绝不实现或承诺任何内容安全绕过机制。
 > **用户核心硬偏好（压缩/换窗绝不可忘）**：
@@ -53,7 +53,7 @@ TavernInAGY/
 │   ├── agents/story-director.md   # 单窗口导演调度 Agent（mainAgent: true + tools 白名单，每轮派发 story-writer 写完即毁）
 │   ├── skills/story-engine/SKILL.md # 互动小说协作规范（禁止编程/文件/终端工具）
 │   └── assets/logo.svg
-├── README.md & LICENSE            # 公开安装文档（含完整合规免责声明）与 MIT 协议
+├── README.md & LICENSE            # 公开安装文档（含完整合规免责声明）与 Apache-2.0 协议
 ├── scripts/install-plugin.mjs     # 一键安装至 ~/.gemini/config/plugins/tavern-in-agy
 └── tests/                         # Vitest 全合成单元测试（7套件/28通过/0跳过，零私人文件名）
 ```
@@ -173,4 +173,5 @@ npm run install:plugin
 ## 6. Git 版本里程碑
 
 - `v0.1.0` ~ `v0.7.2`：核心引擎 → AGY Hooks/MCP → 暖墨单文件阅读器 → 真 MVU/EJS → 正则三路渲染 → 单窗口导演模式 + 12 KB 分块防截断
-- `v0.7.3`（当前）：默认开启导演模式 + 全链路中性命名（`story_*` / `story-director` / `story-writer` / `story-engine`）+ 真·通用无硬编码渲染管线 + `getCurrentMessageId`/范围 `getChatMessages`/`/setinput` 沙箱垫片 + 外观与页面尺寸调节 + Author's Note + 无损多周目存档 + 手动填回式 `↻ 重Roll本楼` + 两轮 10 处深水区修复 + 隐私清洗与公开 `README.md`/MIT 协议
+- `v0.7.3`：默认开启导演模式 + 全链路中性命名（`story_*` / `story-director` / `story-writer` / `story-engine`）+ 真·通用无硬编码渲染管线 + `getCurrentMessageId`/范围 `getChatMessages`/`/setinput` 沙箱垫片 + 外观与页面尺寸调节 + Author's Note + 无损多周目存档 + 手动填回式 `↻ 重Roll本楼` + 两轮 10 处深水区修复 + 隐私清洗与公开 `README.md`
+- `v0.7.4`（当前）：单进程 20 KB 分块（500 KB / 18.7 万 token 实测零截断）+ 15 万上下文动态历史预算 + Apache-2.0 协议与净室独立实现声明
