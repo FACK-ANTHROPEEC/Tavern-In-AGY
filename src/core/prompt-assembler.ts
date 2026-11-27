@@ -195,9 +195,11 @@ export function assembleSessionStart(params: {
       return depthDiff !== 0 ? depthDiff : a.entry.order - b.entry.order;
     });
 
-  const rawWiBefore = beforeCharLore.map((x) => x.entry.content).filter((s) => s.trim()).join('\n');
-  const rawWiAfter = afterCharLore.map((x) => x.entry.content).filter((s) => s.trim()).join('\n');
-  const rawWiInChat = inChatLore.map((x) => x.entry.content).filter((s) => s.trim()).join('\n');
+  // Render EJS per lorebook entry first so one malformed entry never breaks sibling entries in the same slot
+  const renderEntryEjs = (content: string): string => (content.includes('<%') ? ejsRender(content) : content);
+  const rawWiBefore = beforeCharLore.map((x) => renderEntryEjs(x.entry.content)).filter((s) => s.trim()).join('\n');
+  const rawWiAfter = afterCharLore.map((x) => renderEntryEjs(x.entry.content)).filter((s) => s.trim()).join('\n');
+  const rawWiInChat = inChatLore.map((x) => renderEntryEjs(x.entry.content)).filter((s) => s.trim()).join('\n');
 
   const rawSlots = {
     worldInfoBefore: rawWiBefore,

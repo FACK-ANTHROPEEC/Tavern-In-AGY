@@ -97,6 +97,7 @@ function safeId(id: string): string {
 
 export class TavernStorage {
   readonly rootDir: string;
+  private readonly jsonCache = new Map<string, { mtimeMs: number; size: number; data: unknown }>();
 
   constructor(dataDir?: string) {
     this.rootDir = resolveDataDir(dataDir);
@@ -105,6 +106,34 @@ export class TavernStorage {
 
   private subPath(...parts: string[]): string {
     return path.join(this.rootDir, ...parts);
+  }
+
+  /**
+   * Stat-validated in-memory JSON cache: avoids re-reading & re-parsing large card/preset
+   * JSON files on every UI poll while automatically invalidating whenever mtimeMs or size changes.
+   */
+  private readJsonCached<T>(filePath: string): T | null {
+    try {
+      const st = fs.statSync(filePath);
+      const hit = this.jsonCache.get(filePath);
+      if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
+        return hit.data as T;
+      }
+      const parsed = readJsonSafe<T>(filePath);
+      if (parsed !== null) {
+        this.jsonCache.set(filePath, { mtimeMs: st.mtimeMs, size: st.size, data: parsed });
+      } else {
+        this.jsonCache.delete(filePath);
+      }
+      return parsed;
+    } catch {
+      this.jsonCache.delete(filePath);
+      return null;
+    }
+  }
+
+  private invalidateCache(filePath: string): void {
+    this.jsonCache.delete(filePath);
   }
 
   // --- Config ---
@@ -125,11 +154,13 @@ export class TavernStorage {
   }
 
   getCard(id: string): CharacterCard | null {
-    return readJsonSafe<CharacterCard>(this.subPath('cards', `${safeId(id)}.json`));
+    return this.readJsonCached<CharacterCard>(this.subPath('cards', `${safeId(id)}.json`));
   }
 
   saveCard(card: CharacterCard): CharacterCard {
-    writeJsonAtomic(this.subPath('cards', `${safeId(card.id)}.json`), card);
+    const p = this.subPath('cards', `${safeId(card.id)}.json`);
+    writeJsonAtomic(p, card);
+    this.invalidateCache(p);
     return card;
   }
 
@@ -137,6 +168,7 @@ export class TavernStorage {
     const p = this.subPath('cards', `${safeId(id)}.json`);
     if (!fs.existsSync(p)) return false;
     fs.unlinkSync(p);
+    this.invalidateCache(p);
     const cfg = this.getConfig();
     if (cfg.activeCardId === id) {
       this.saveConfig({ activeCardId: null });
@@ -150,11 +182,13 @@ export class TavernStorage {
   }
 
   getPreset(id: string): Preset | null {
-    return readJsonSafe<Preset>(this.subPath('presets', `${safeId(id)}.json`));
+    return this.readJsonCached<Preset>(this.subPath('presets', `${safeId(id)}.json`));
   }
 
   savePreset(preset: Preset): Preset {
-    writeJsonAtomic(this.subPath('presets', `${safeId(preset.id)}.json`), preset);
+    const p = this.subPath('presets', `${safeId(preset.id)}.json`);
+    writeJsonAtomic(p, preset);
+    this.invalidateCache(p);
     return preset;
   }
 
@@ -162,6 +196,7 @@ export class TavernStorage {
     const p = this.subPath('presets', `${safeId(id)}.json`);
     if (!fs.existsSync(p)) return false;
     fs.unlinkSync(p);
+    this.invalidateCache(p);
     const cfg = this.getConfig();
     if (cfg.activePresetId === id) {
       this.saveConfig({ activePresetId: null });
@@ -175,11 +210,13 @@ export class TavernStorage {
   }
 
   getLorebook(id: string): Lorebook | null {
-    return readJsonSafe<Lorebook>(this.subPath('lorebooks', `${safeId(id)}.json`));
+    return this.readJsonCached<Lorebook>(this.subPath('lorebooks', `${safeId(id)}.json`));
   }
 
   saveLorebook(book: Lorebook): Lorebook {
-    writeJsonAtomic(this.subPath('lorebooks', `${safeId(book.id)}.json`), book);
+    const p = this.subPath('lorebooks', `${safeId(book.id)}.json`);
+    writeJsonAtomic(p, book);
+    this.invalidateCache(p);
     return book;
   }
 
@@ -187,6 +224,7 @@ export class TavernStorage {
     const p = this.subPath('lorebooks', `${safeId(id)}.json`);
     if (!fs.existsSync(p)) return false;
     fs.unlinkSync(p);
+    this.invalidateCache(p);
     const cfg = this.getConfig();
     if (cfg.activeLorebookIds.includes(id)) {
       this.saveConfig({
@@ -268,7 +306,7 @@ export class TavernStorage {
     const results: T[] = [];
     for (const file of fs.readdirSync(dir)) {
       if (!file.endsWith('.json')) continue;
-      const item = readJsonSafe<T>(path.join(dir, file));
+      const item = this.readJsonCached<T>(path.join(dir, file));
       if (item) results.push(item);
     }
     return results;

@@ -321,4 +321,16 @@ describe('Synthetic MVU + EJS + Extension Card Integration', () => {
     expect(html).toContain('window.jQuery = jQueryShim;');
     expect(html).toContain('window.errorCatched = errorCatched;');
   });
+
+  it('provides `variables` global and authentic lodash-es array paths in EJS templates', () => {
+    const out = renderEjsTemplate(
+      `<% const h = _.get(variables, ['stat_data', '角色', '苏莱娅'], {}); %>姓名:<%= h.姓名 %>|好感:<%= h.好感 %>`,
+      {
+        statData: { 角色: { 苏莱娅: { 姓名: '苏莱娅', 好感: 88 } } },
+        vars: {},
+        userName: 'User',
+      },
+    );
+    expect(out).toBe('姓名:苏莱娅|好感:88');
+  });
 });

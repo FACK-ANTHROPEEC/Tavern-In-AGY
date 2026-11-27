@@ -183,7 +183,8 @@ npm run install:plugin
     - **MVU 宏与 Zod 垫片**：`macro-engine.ts` 与 `ejs-engine.ts` 必须同时展开 `stat_data`/`display_data`/`delta_data`；`sandbox-shim.ts` 的 `runRegisteredSchemas` 必须 `return current;`（不得返回旧 `STAT`）；`applyMvuUpdates` 必须单遍按源码顺序执行 lodash 更新；
     - **前端发送与 iframe 安全**：`App.tsx` 回车发送必须检查 `!e.nativeEvent.isComposing`、`onSetInput` 必须同步 `composerTextRef.current`、`MvuZodRuntimeHost` 必须校验 `cardFrontend.cardId === activeCard.id` 并记录 `bakedStatJsonRef`、三处 `onMessage` 必须校验 `evt.source === iframeRef.current?.contentWindow`；
     - **ST V2/V3 世界书 `entry.extensions` 与槽位落位**：`parseLorebookJson` 必须读取 `entry.extensions` 中的 `prevent_recursion`、`exclude_recursion`、`delay_until_recursion`、`selectiveLogic`、`position`、`depth`、`scan_depth`（不可只读顶层驼峰字段，否则会引发跨角色递归雪崩）；`prompt-assembler.ts` 将常驻蓝灯与动态绿灯统一按 `position`（`before_char` / `after_char` / `in_chat`）、`depth` 降序与 `insertion_order` 升序精确回填对应槽位；
-    - **YAML `[initvar]` 与通用正文美化沙箱**：`mvu-engine.ts` 支持 JSON/JSONC + `js-yaml` 双解析（仅当原文以 `{` 开头时才提取 `{...}` 防止误吞 YAML 内联 `{}`）；`sandbox-shim.ts` 内置 `jQuery`/`$`、`errorCatched`、`tavern_events` 与内存 `localStorage`；`FloorRenderer.tsx` 对含 `#chat .mes .mes_text` 正文美化脚本的卡片自动启用 `sandbox="allow-scripts"`（不带 `allow-same-origin`，防止脚本越权读取外层 React `window.parent.document`）。
+    - **YAML `[initvar]` 与通用正文美化沙箱**：`mvu-engine.ts` 支持 JSON/JSONC + `js-yaml` 双解析（仅当原文以 `{` 开头时才提取 `{...}` 防止误吞 YAML 内联 `{}`）；`sandbox-shim.ts` 内置 `jQuery`/`$`、`errorCatched`、`tavern_events` 与内存 `localStorage`，正文美化走 `liteProseMode: true` 精简垫片；`FloorRenderer.tsx` 对含 `#chat .mes .mes_text` 正文美化脚本的卡片自动启用 `sandbox="allow-scripts"`（不带 `allow-same-origin`），且历史楼层最多仅最新 10 楼（`depth < 10`）挂载沙箱 iframe；
+    - **EJS 隔离与存储缓存**：`ejs-engine.ts` 使用真实 `lodash-es` 并暴露 `variables` 全局对象；`prompt-assembler.ts` 逐条渲染世界书 EJS 防止单条报错连坐整块；`storage.ts` 对卡片/预设/世界书启用 `mtimeMs + size` 内存缓存（轮询 0 重复 `JSON.parse`）。
 
 ---
 
@@ -210,4 +211,4 @@ npm run install:plugin
 - `v0.7.4`：单进程 20 KB 分块（500 KB / 18.7 万 token 实测零截断）+ 15 万上下文动态历史预算 + Apache-2.0 协议与净室独立实现声明
 - `v0.7.5`：大卡 PNG 前端解包 + 384 KB 分片上传 + 真·通用 MVU Zod v4 / 完整 `lodash-es` 后台常驻沙箱（`registerMvuSchema` 工厂函数、`Mvu.events` 双发、`getAllVariables`、`setChatMessages`）+ 多开场白翻页/直跳/初始态补丁 + `resources/read` 动态外链图床 CSP + 每层小铅笔编辑 + 10 楼分页懒加载 + 卡片/预设脚本独立开关 + iframe 折叠精准缩高与 `#send_textarea`/`#send_but` 桥接
 - `v0.8.0`：记忆插件基础版（顶部独立「记忆」Tab + 总开关 + 提示词约束每轮 ~200 字 `<memory_summary>` + 精确按楼滑动窗口仅喂最新 N 楼完整正文/更早楼层全给小总结 + 逐楼时间线编辑补写 + 正文折叠展示）与 Phase 2–4 进阶记忆/外部 API 规划
-- `v0.8.1`（当前）：`/rp` & `/rp off` 单窗口零污染隔离 + 导演无回显安全暂存路由与三层同轮防重锁 + 16 项安全加固与 18 项全链路捉虫修复 + ST V2/V3 世界书 `entry.extensions` 递归防雪崩与蓝绿灯按 `position`/`depth`/`order` 精确回填槽位 + YAML `[initvar]` + 通用 `jQuery`/`errorCatched`/`tavern_events` 沙箱与 `#chat .mes .mes_text` 正文美化沙箱 + 65 主流图床/CDN CSP 白名单（全量 12 套件 / 62 用例通过）
+- `v0.8.1`（当前）：`/rp` & `/rp off` 单窗口零污染隔离 + 导演无回显安全暂存路由与三层同轮防重锁 + 16 项安全加固与 18 项全链路捉虫修复 + ST V2/V3 世界书 `entry.extensions` 递归防雪崩与蓝绿灯按 `position`/`depth`/`order` 精确回填槽位 + YAML `[initvar]` + 通用 `jQuery`/`errorCatched`/`tavern_events` 沙箱与 `#chat .mes .mes_text` 正文美化沙箱 + 65 主流图床/CDN CSP 白名单 + 3 项核心性能优化（最新 10 楼 iframe 上限、`storage.ts` 41x `mtimeMs` 缓存、`liteProseMode` 精简垫片）与 EJS `variables`/`lodash-es`/逐条隔离修复（全量 12 套件 / 63 用例通过）

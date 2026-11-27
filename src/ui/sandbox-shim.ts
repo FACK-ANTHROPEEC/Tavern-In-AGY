@@ -13,6 +13,8 @@ export interface SandboxShimOptions {
   activeGreetingIndex?: number;
   storyTurns?: Array<{ index: number; userMessage?: string; narrative: string }>;
   customExtensions?: Record<string, unknown>;
+  /** Lightweight mode for per-floor prose beautifiers: omits full storyTurns/greetings serialization */
+  liteProseMode?: boolean;
 }
 
 export interface ParsedSlashAction {
@@ -184,7 +186,7 @@ window.addEventListener('DOMContentLoaded', function(){
 });
 </script>`;
 
-  return buildSandboxedSrcDoc(bodyHtml, opts);
+  return buildSandboxedSrcDoc(bodyHtml, { ...opts, liteProseMode: true });
 }
 
 /**
@@ -214,15 +216,17 @@ export function buildHelperScriptsStageHtml(
  * `window.z` (Zod v4), `window.Mvu`, `registerMvuSchema`, and `waitGlobalInitialized`.
  */
 export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions): string {
-  const chatMessages = (opts.storyTurns ?? []).map((t) => ({
-    message_id: t.index,
-    name: opts.charName,
-    role: 'assistant',
-    is_user: false,
-    is_hidden: false,
-    message: t.narrative,
-    data: { stat_data: opts.statData },
-  }));
+  const chatMessages = opts.liteProseMode
+    ? []
+    : (opts.storyTurns ?? []).map((t) => ({
+        message_id: t.index,
+        name: opts.charName,
+        role: 'assistant',
+        is_user: false,
+        is_hidden: false,
+        message: t.narrative,
+        data: { stat_data: opts.statData },
+      }));
 
   const currentId =
     typeof opts.currentMessageId === 'number'
@@ -231,11 +235,13 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
         ? chatMessages[chatMessages.length - 1].message_id
         : 0;
 
-  const allGreetings = Array.isArray(opts.greetings) && opts.greetings.length > 0
-    ? opts.greetings
-    : typeof opts.currentNarrative === 'string' && currentId === 0
-      ? [opts.currentNarrative]
-      : [];
+  const allGreetings = opts.liteProseMode
+    ? []
+    : Array.isArray(opts.greetings) && opts.greetings.length > 0
+      ? opts.greetings
+      : typeof opts.currentNarrative === 'string' && currentId === 0
+        ? [opts.currentNarrative]
+        : [];
   const activeGreetingIdx =
     typeof opts.activeGreetingIndex === 'number'
       ? Math.max(0, Math.min(Math.max(0, allGreetings.length - 1), opts.activeGreetingIndex))

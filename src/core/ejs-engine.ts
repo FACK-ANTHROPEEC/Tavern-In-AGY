@@ -1,6 +1,7 @@
 import ejs from 'ejs';
+import * as lodashEs from 'lodash-es';
 import type { CharacterCard, Lorebook } from './types.js';
-import { getByDotPath, lodashShim, setByDotPath } from './mvu-engine.js';
+import { getByDotPath, setByDotPath } from './mvu-engine.js';
 
 export interface EjsTemplateContext {
   statData: Record<string, unknown>;
@@ -90,6 +91,13 @@ export function renderEjsTemplate(template: string, ctx: EjsTemplateContext): st
     scenario: ctx.card?.scenario ?? '',
   });
 
+  const variables = {
+    ...ctx.vars,
+    stat_data: ctx.statData,
+    display_data: ctx.statData,
+    delta_data: {},
+  };
+
   try {
     return ejs.render(
       cleaned,
@@ -98,12 +106,13 @@ export function renderEjsTemplate(template: string, ctx: EjsTemplateContext): st
         setvar,
         getwi,
         getchar,
+        variables,
         stat_data: ctx.statData,
         display_data: ctx.statData,
         delta_data: {},
         user: ctx.userName ?? 'User',
         char: ctx.card?.name ?? '',
-        _: lodashShim,
+        _: lodashEs,
       },
       {
         outputFunctionName: 'print',

@@ -11,6 +11,8 @@ interface FloorRendererProps {
   regexScripts: RegexScript[];
   enableRegex: boolean;
   proseBeautifierScripts?: Array<{ name: string; content: string }>;
+  /** Limits active sandbox iframes to recent floors (default true) so expanding 50+ floors stays lightweight */
+  allowSandboxIframe?: boolean;
   unknownTagMode?: 'fold' | 'keep' | 'hide';
   memorySummary?: string;
   memorySummaryDisplayMode?: 'fold' | 'hide';
@@ -282,6 +284,7 @@ export function FloorRenderer({
   regexScripts,
   enableRegex,
   proseBeautifierScripts,
+  allowSandboxIframe = true,
   unknownTagMode = 'fold',
   memorySummary,
   memorySummaryDisplayMode = 'fold',
@@ -340,7 +343,7 @@ export function FloorRenderer({
     <div className="floor-segments">
       {segments.map((seg, idx) => {
         if (seg.kind === 'text') {
-          if (enableRegex && proseBeautifierScripts && proseBeautifierScripts.length > 0) {
+          if (allowSandboxIframe && enableRegex && proseBeautifierScripts && proseBeautifierScripts.length > 0) {
             return (
               <SandboxedProseBlock
                 key={`prose-${idx}`}
@@ -370,6 +373,13 @@ export function FloorRenderer({
               className="story-html-block"
               dangerouslySetInnerHTML={{ __html: seg.html }}
             />
+          );
+        }
+        if (!allowSandboxIframe) {
+          return (
+            <div key={`wid-skip-${idx}`} className="muted" style={{ fontSize: 12, padding: '4px 0' }}>
+              [{seg.title || '历史楼层交互组件'} · 仅最新 10 楼挂载沙箱以节省内存]
+            </div>
           );
         }
         return (

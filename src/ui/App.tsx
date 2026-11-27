@@ -1141,6 +1141,7 @@ export function AppView() {
                         regexScripts={data.activeDisplayRegexScripts ?? []}
                         enableRegex={enableRegexBeautify}
                         proseBeautifierScripts={activeProseBeautifierScripts}
+                        allowSandboxIframe={depth < 10}
                         unknownTagMode={unknownTagMode}
                         memorySummary={t.memorySummary}
                         memorySummaryDisplayMode={data.config.memoryPlugin?.summaryDisplayMode ?? 'fold'}
