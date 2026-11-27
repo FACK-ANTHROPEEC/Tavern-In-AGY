@@ -177,6 +177,10 @@ export interface SessionRuntime {
   lastUserInputForCommit?: string;
   /** Tracks whether [Memory Summary Contract] has already been injected in this session */
   memoryContractInjected?: boolean;
+  /** Marks a subagent session unlocked by SessionStart as story-writer so PreInvocation never injects director prompts into it */
+  isWriterSubagent?: boolean;
+  /** Director Mode per-turn handshake state stored on the shared 'default' session to prevent duplicate dispatch on subagent wakeup */
+  directorTurnState?: 'idle' | 'dispatched' | 'committed';
 }
 
 export interface SessionSnapshot {

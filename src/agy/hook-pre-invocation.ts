@@ -1,3 +1,5 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { TavernStorage } from '../core/storage.js';
 import {
   assemblePreInvocation,
@@ -9,8 +11,9 @@ import { applyMvuUpdates } from '../core/mvu-engine.js';
 import { StoryLogStore, resolveStoryKey } from '../core/story-log.js';
 import { extractWaveOptions, readRecentTranscriptTexts } from './transcript-reader.js';
 import type { Lorebook } from '../core/types.js';
+import type { HookOutput } from './hook-session-start.js';
 
-interface PreInvocationInput {
+export interface PreInvocationInput {
   conversationId?: string;
   lastUserInput?: string;
   transcriptPath?: string;
@@ -25,33 +28,29 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function main(): Promise<void> {
-  const raw = (await readStdin()).trim();
-  const payload: PreInvocationInput = raw ? JSON.parse(raw) : {};
-  const storage = new TavernStorage();
+export function handlePreInvocation(
+  payload: PreInvocationInput,
+  storage = new TavernStorage(),
+): HookOutput {
   const config = storage.getConfig();
 
   if (!config.enabled || !config.activeCardId) {
-    process.stdout.write(JSON.stringify({}));
-    return;
+    return {};
   }
 
   const lastUserInput = (payload.lastUserInput ?? '').trim();
   if (!lastUserInput) {
-    process.stdout.write(JSON.stringify({}));
-    return;
+    return {};
   }
 
   // Skip slash commands (e.g. /tavern-rp, /compact, /plan) so invoking a skill or command never triggers RP injection
   if (/^\/[a-z0-9_-]+(?:\s|$)/i.test(lastUserInput)) {
-    process.stdout.write(JSON.stringify({}));
-    return;
+    return {};
   }
 
   const card = storage.getCard(config.activeCardId);
   if (!card) {
-    process.stdout.write(JSON.stringify({}));
-    return;
+    return {};
   }
 
   const convId = payload.conversationId || 'default';
@@ -66,6 +65,12 @@ async function main(): Promise<void> {
     }
   }
 
+  // In Director Mode, story-writer subagent sessions are unlocked by SessionStart and marked `isWriterSubagent`.
+  // Never inject [Story Director] prompts into the writer itself or overwrite shared dispatch fields.
+  if (config.directorMode && session.isWriterSubagent) {
+    return {};
+  }
+
   // Deduplicate multiple model invocations ONLY within the SAME user turn (explicit invocationNum > 1),
   // so sending the same short message (e.g. "继续") across consecutive turns never drops pendingDirectorInput.
   const inputHash = hashText(lastUserInput);
@@ -74,8 +79,7 @@ async function main(): Promise<void> {
     typeof payload.invocationNum === 'number' &&
     payload.invocationNum > 1
   ) {
-    process.stdout.write(JSON.stringify({}));
-    return;
+    return {};
   }
 
   // Director Mode: main window acts as a lightweight dispatcher (story-director) and spawns a fresh
@@ -83,25 +87,37 @@ async function main(): Promise<void> {
   // with a 5-min TTL so the spawned story-writer subagent's SessionStart unlocks and injects full context.
   if (config.directorMode) {
     const shared = storage.getSession('default');
+
+    // Reactive wakeup after story-writer finishes (invocationNum resets to 1 while lastUserInput is unchanged):
+    // if this exact turn was already claimed by the writer (pendingDirectorInput consumed) or committed,
+    // reset state to 'idle' and return {} so the director wraps up instead of dispatching a duplicate writer.
+    const isPostWriterWakeup =
+      session.lastUserInputHash === inputHash &&
+      (shared.directorTurnState === 'committed' ||
+        (shared.directorTurnState === 'dispatched' && !shared.pendingDirectorInput));
+    if (isPostWriterWakeup) {
+      shared.directorTurnState = 'idle';
+      storage.saveSession(shared);
+      return {};
+    }
+
+    shared.directorTurnState = 'dispatched';
     shared.pendingDirectorInput = lastUserInput;
     shared.pendingDirectorInputAt = Date.now();
     shared.lastUserInputForCommit = lastUserInput;
     storage.saveSession(shared);
     session.lastUserInputHash = inputHash;
     storage.saveSession(session);
-    process.stdout.write(
-      JSON.stringify({
-        injectSteps: [
-          {
-            systemMessage: {
-              systemMessage:
-                '[Story Director] You are the dispatcher ONLY. Do NOT write story prose or call story_search_lorebook/story_commit_turn. Immediately call invoke_subagent(TypeName="story-writer", Role="Story Turn Writer") with the user message, wait for completion, then kill the subagent and reply with only the 1-line floor index.',
-            },
+    return {
+      injectSteps: [
+        {
+          systemMessage: {
+            systemMessage:
+              '[Story Director] You are the dispatcher ONLY. Do NOT write story prose or call story_search_lorebook/story_commit_turn. Immediately call invoke_subagent(TypeName="story-writer", Role="Story Turn Writer") with the user message, wait for completion, then kill the subagent and reply with only the 1-line floor index.',
           },
-        ],
-      }),
-    );
-    return;
+        },
+      ],
+    };
   }
 
   const preset = config.activePresetId ? storage.getPreset(config.activePresetId) : null;
@@ -223,21 +239,31 @@ async function main(): Promise<void> {
 
   const chunks = splitIntoInjectChunks(combinedMessage, 20480);
   if (chunks.length === 0) {
-    process.stdout.write(JSON.stringify({}));
-    return;
+    return {};
   }
 
-  process.stdout.write(
-    JSON.stringify({
-      injectSteps: chunks.map((chunk) => ({
-        systemMessage: {
-          systemMessage: chunk,
-        },
-      })),
-    }),
-  );
+  return {
+    injectSteps: chunks.map((chunk) => ({
+      systemMessage: {
+        systemMessage: chunk,
+      },
+    })),
+  };
 }
 
-main().catch(() => {
-  process.stdout.write(JSON.stringify({}));
-});
+async function main(): Promise<void> {
+  const raw = (await readStdin()).trim();
+  const payload: PreInvocationInput = raw ? JSON.parse(raw) : {};
+  const result = handlePreInvocation(payload);
+  process.stdout.write(JSON.stringify(result));
+}
+
+const isDirectMain =
+  typeof process.argv[1] === 'string' &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectMain) {
+  main().catch(() => {
+    process.stdout.write(JSON.stringify({}));
+  });
+}

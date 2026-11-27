@@ -6,7 +6,7 @@
 - **最近完成**：
   - **v0.8.0 记忆插件基础版（滑动窗口 + 逐楼小总结）**：新增 `src/core/memory-engine.ts`，支持总开关、每轮末尾提示词约束生成 ~200 字 `<memory_summary>`（兼容 `<wave_summary>` / `<summary>`）、精确按楼数切分滑动窗口（最新 N 楼完整正文，默认 10 楼可自由调整；更早楼层全部替换为 `[Earlier Story Memory]` 小总结，旧楼无摘要自动摘录降级）；侧边栏顶部新增独立「记忆」Tab（总开关、窗口/字数/显示方式/自定义提示词配置、逐楼时间线编辑补写），阅读器自动折叠/隐藏摘要标签；已在 `DEVELOPMENT.md` 写入 Phase 2–4（分层滚动大总结、结构化记忆簿、外部独立 API 总结）远期路线图。
   - **v0.7.5 前序里程碑**：大卡 PNG 本地解包 + 384 KB 分片上传；真·通用 MVU Zod v4 + `lodash-es` 后台沙箱；多开场白翻页/直跳；`resources/read` 动态外链图床 CSP；每层小铅笔编辑与 10 楼分页懒加载。
-- **验证状态**：`npm test` **9 套件 / 41 用例全绿（0 skipped）**；`npm run build` & `npm run install:plugin` 通过。
+- **验证状态**：`npm test` **10 套件 / 44 用例全绿（0 skipped）**；`npm run build` & `npm run install:plugin` 通过。
 
 ## 2. 架构约束与关键契约
 - **目录与分层红线**：

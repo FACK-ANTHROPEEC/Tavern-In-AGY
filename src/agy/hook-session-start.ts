@@ -1,12 +1,18 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { TavernStorage } from '../core/storage.js';
 import { assembleSessionStart, splitIntoInjectChunks } from '../core/prompt-assembler.js';
 import { StoryLogStore, resolveStoryKey } from '../core/story-log.js';
 import type { Lorebook } from '../core/types.js';
 
-interface SessionStartInput {
+export interface SessionStartInput {
   conversationId?: string;
   workspacePaths?: string[];
   transcriptPath?: string;
+}
+
+export interface HookOutput {
+  injectSteps?: Array<{ systemMessage: { systemMessage: string } }>;
 }
 
 async function readStdin(): Promise<string> {
@@ -17,21 +23,19 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function main(): Promise<void> {
-  const raw = (await readStdin()).trim();
-  const payload: SessionStartInput = raw ? JSON.parse(raw) : {};
-  const storage = new TavernStorage();
+export function handleSessionStart(
+  payload: SessionStartInput,
+  storage = new TavernStorage(),
+): HookOutput {
   const config = storage.getConfig();
 
   if (!config.enabled || !config.activeCardId) {
-    process.stdout.write(JSON.stringify({}));
-    return;
+    return {};
   }
 
   const card = storage.getCard(config.activeCardId);
   if (!card) {
-    process.stdout.write(JSON.stringify({}));
-    return;
+    return {};
   }
 
   const preset = config.activePresetId ? storage.getPreset(config.activePresetId) : null;
@@ -65,13 +69,13 @@ async function main(): Promise<void> {
         shared.pendingDirectorInputAt = undefined;
         storage.saveSession(shared);
       }
-      process.stdout.write(JSON.stringify({}));
-      return;
+      return {};
     }
     pendingDirectorInput = shared.pendingDirectorInput!;
     shared.pendingDirectorInput = undefined;
     shared.pendingDirectorInputAt = undefined;
     storage.saveSession(shared);
+    session.isWriterSubagent = true;
   } else if (shared.pendingDirectorInput) {
     shared.pendingDirectorInput = undefined;
     shared.pendingDirectorInputAt = undefined;
@@ -145,22 +149,32 @@ async function main(): Promise<void> {
 
   const chunks = splitIntoInjectChunks(bundle.systemMessage, 20480);
   if (chunks.length === 0) {
-    process.stdout.write(JSON.stringify({}));
-    return;
+    return {};
   }
 
-  process.stdout.write(
-    JSON.stringify({
-      injectSteps: chunks.map((chunk) => ({
-        systemMessage: {
-          systemMessage: chunk,
-        },
-      })),
-    }),
-  );
+  return {
+    injectSteps: chunks.map((chunk) => ({
+      systemMessage: {
+        systemMessage: chunk,
+      },
+    })),
+  };
 }
 
-main().catch(() => {
-  // Never crash the agent loop on hook error; fail open cleanly
-  process.stdout.write(JSON.stringify({}));
-});
+async function main(): Promise<void> {
+  const raw = (await readStdin()).trim();
+  const payload: SessionStartInput = raw ? JSON.parse(raw) : {};
+  const result = handleSessionStart(payload);
+  process.stdout.write(JSON.stringify(result));
+}
+
+const isDirectMain =
+  typeof process.argv[1] === 'string' &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectMain) {
+  main().catch(() => {
+    // Never crash the agent loop on hook error; fail open cleanly
+    process.stdout.write(JSON.stringify({}));
+  });
+}

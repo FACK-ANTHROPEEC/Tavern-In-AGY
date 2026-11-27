@@ -430,7 +430,14 @@ server.registerTool(
       undefined;
     session.lastUserInputForCommit = undefined;
     session.latestOptions = normalizedOptions;
+    session.directorTurnState = 'committed';
     storage.saveSession(session);
+    if (session.conversationId !== DEFAULT_SESSION_ID) {
+      const shared = storage.getSession(DEFAULT_SESSION_ID);
+      shared.directorTurnState = 'committed';
+      shared.lastUserInputForCommit = undefined;
+      storage.saveSession(shared);
+    }
 
     const storyKey = getActiveStoryKey(config);
     const cleanedNarrative = mvuRes.cleanedText || args.narrative;

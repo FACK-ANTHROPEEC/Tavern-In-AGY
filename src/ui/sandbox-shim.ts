@@ -65,6 +65,20 @@ export function parseSlashCommandToMessage(rawCmd: string): string | null {
 }
 
 /**
+ * Safely serializes arbitrary JSON for embedding inside an HTML `<script>` tag.
+ * Escapes `<`, `>`, `&`, and JS line separators so embedded `</script>` or `<!--`
+ * inside card extensions, greetings, or story turns can never break out of `<script>`.
+ */
+export function safeJsonForInlineScript(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+/**
  * Wraps card/preset helper scripts into safe async IIFEs for an isolated iframe stage,
  * stripping external CDN static `import 'https://...'` lines (since the local sandbox shim
  * already provides `window.z` (Zod v4), `window.Mvu`, `window.registerMvuSchema`, and `window._`).
@@ -78,7 +92,7 @@ export function buildHelperScriptsStageHtml(
         .replace(/^\s*import\s+(?:[^'"]+\s+from\s+)?['"]https?:\/\/[^'"]+['"]\s*;?\s*$/gm, '// [local Mvu/Zod runtime active]')
         .replace(/<\/script>/gi, '<\\/script>');
       const safeName = sc.name.replace(/-->/g, '').replace(/\r?\n/g, ' ');
-      return `<script>\n// ${safeName}\n(async function(){\ntry {\n${sanitized}\n} catch (e) { console.error('[HelperScript:' + ${JSON.stringify(safeName)} + ']', e); }\n})();\n</script>`;
+      return `<script>\n// ${safeName}\n(async function(){\ntry {\n${sanitized}\n} catch (e) { console.error('[HelperScript:' + ${safeJsonForInlineScript(safeName)} + ']', e); }\n})();\n</script>`;
     })
     .join('\n');
   return `<div id="tavern-helper-stage" style="min-height:1px;position:relative;"></div>\n${scriptTags}`;
@@ -161,13 +175,13 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
 
   const bridgeScript = `<script>
 (function(){
-  const WID = ${JSON.stringify(opts.widgetId)};
-  let STAT = ${JSON.stringify(opts.statData ?? {})};
-  const CHAR = ${JSON.stringify(opts.charName || 'Character')};
-  const USER = ${JSON.stringify(opts.userName || 'User')};
-  const CHAT = ${JSON.stringify(chatMessages)};
-  const CURRENT_ID = ${JSON.stringify(currentId)};
-  const EXT = ${JSON.stringify(opts.customExtensions ?? {})};
+  const WID = ${safeJsonForInlineScript(opts.widgetId)};
+  let STAT = ${safeJsonForInlineScript(opts.statData ?? {})};
+  const CHAR = ${safeJsonForInlineScript(opts.charName || 'Character')};
+  const USER = ${safeJsonForInlineScript(opts.userName || 'User')};
+  const CHAT = ${safeJsonForInlineScript(chatMessages)};
+  const CURRENT_ID = ${safeJsonForInlineScript(currentId)};
+  const EXT = ${safeJsonForInlineScript(opts.customExtensions ?? {})};
   const LISTENERS = new Map();
 
   function cloneDeep(v){
