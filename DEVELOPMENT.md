@@ -178,14 +178,17 @@ npm run install:plugin
 
 ## 5. 下一步规划与待办路线图
 
-1. **【v0.8.0 核心计划】正文摘要 / 剧情压缩模块（Story Summary & Compression）**：
-   - **目标**：在已支持 15 万上下文（500 KB / 20 KB 分块）的基础上，解决长篇演绎（尤其是导演模式每轮全量重拼）Token 消耗随楼层线性增长的问题，同时统一承载「历史上下文预算 / 保留完整正文楼层数」设置。
-   - **设计思路**：
-     - 在 `StoryLogStore` / `SessionRuntime` 增加分层记忆结构：`pinnedSummary`（阶段性大总结）+ 最近 `N` 楼完整正文（如保留最近 6～10 楼原汁原味，更早楼层替换为精炼摘要）；
-     - 支持自动提取预设自带的 `<wave_summary>` / `<summary>` 标签存入每楼 `turn.summary`，并支持在侧边栏手动编辑或一键触发「整理阶段大总结」；
-     - `formatForForkResume` 在注入历史楼层时，对超过阈值深度的旧楼层自动输出 `turn.summary` 而非数千字全文，大幅省额度同时保持长期记忆不丢。
-2. **导演与写手异构模型配对实测（按用户需求）**：
-   - 若用户需要，可在 `story-director` 配置中增加可切换的派发档位（`inherit` vs `pro`），方便主窗口选 `4 hydrogen` 搭配 `pro` 档写手实测路由。
+1. **【v0.8.0 已落地】记忆插件基础版（Memory Plugin · 滑动窗口 + 逐楼小总结）**：
+   - 借鉴社区记忆插件（如 `ST-BaiBai-Book`）的消息级叶子摘要与分层压缩思路，采用净室独立实现：
+   - **提示词约束（[memory-engine.ts](src/core/memory-engine.ts) + [prompt-assembler.ts](src/core/prompt-assembler.ts)）**：开启总开关后，自动在上下文末尾注入 `[Memory Summary Contract]`，约束模型每轮正文末尾附带约 200 字（可调，支持自定义提示词）的 `<memory_summary>...</memory_summary>` 客观剧情小总结；落盘时自动提取并兼容 `<wave_summary>` / `<summary>` 存入 `StoryTurn.memorySummary`。
+   - **精确按楼滑动窗口（[story-log.ts](src/core/story-log.ts)）**：喂给模型时仅保留最新 `recentFullFloors` 楼（默认 10 楼 = 5 轮玩家输入 + 5 轮 AI 正文，支持 6 / 7 / 8 / 10 / 12 等任意奇偶楼数）的完整正文，更早的所有楼层全部替换为 `[Earlier Story Memory]` 逐楼小总结；历史旧楼缺失摘要时自动轻量化摘录降级。
+   - **独立「记忆」Tab 与阅读器折叠（[App.tsx](src/ui/App.tsx) + [FloorRenderer.tsx](src/ui/FloorRenderer.tsx)）**：顶部导航单独开设「记忆」栏，提供总开关、实时全量/压缩楼层统计、完整正文窗口配置、摘要字数/显示方式/自定义提示词，以及逐楼记忆时间线（支持手动修改与历史补写）；正文阅读器中默认将 `<memory_summary>` 优雅折叠为小条或隐藏，不干扰沉浸阅读。
+2. **【远期规划】记忆插件进阶演进（Memory Plugin Roadmap · Phase 2–4）**：
+   - **Phase 2 · 分层滚动大总结（Hierarchical / Rolling Summary）**：当早期逐楼小总结累积超过阈值（例如每 10～20 轮）时，支持归并生成章节级/阶段级「大总结」（摘要森林结构），支持手动锁定、编辑与回滚，让百轮超长局也能稳定控制上下文体积。
+   - **Phase 3 · 结构化记忆簿（Structured Memory Book）**：按实体维度独立追踪「人物关系变迁」「角色专属认知与秘密（防止角色跨场景全知）」「重要物品/地点状态」「未完伏笔与故事线」，并结合世界书/关键词触发机制按需召回。
+   - **Phase 4 · 外部独立 API / 旁路模型总结（External API Summarizer）**：支持配置独立的 OpenAI 兼容 / Gemini / 本地 Ollama 等外部轻量化模型端点，在后台异步为旧楼批量补齐缺失摘要、提炼结构化记忆或生成阶段大总结，完全不占用主对话模型上下文与额度。
+3. **导演与写手异构模型配对实测（按用户需求）**：
+   - 若用户需要，可在 `story-director` 配置中增加可切换的派发档位（`inherit` vs `pro`），方便主窗口选轻量模型搭配强推理写手实测路由。
 
 ---
 
@@ -194,4 +197,5 @@ npm run install:plugin
 - `v0.1.0` ~ `v0.7.2`：核心引擎 → AGY Hooks/MCP → 暖墨单文件阅读器 → 真 MVU/EJS → 正则三路渲染 → 单窗口导演模式 + 12 KB 分块防截断
 - `v0.7.3`：默认开启导演模式 + 全链路中性命名（`story_*` / `story-director` / `story-writer` / `story-engine`）+ 真·通用无硬编码渲染管线 + `getCurrentMessageId`/范围 `getChatMessages`/`/setinput` 沙箱垫片 + 外观与页面尺寸调节 + Author's Note + 无损多周目存档 + 手动填回式 `↻ 重Roll本楼` + 两轮 10 处深水区修复 + 隐私清洗与公开 `README.md`
 - `v0.7.4`：单进程 20 KB 分块（500 KB / 18.7 万 token 实测零截断）+ 15 万上下文动态历史预算 + Apache-2.0 协议与净室独立实现声明
-- `v0.7.5`（当前）：大卡 PNG 前端解包 + 384 KB 分片上传 + 真·通用 MVU Zod v4 / 完整 `lodash-es` 后台常驻沙箱（`registerMvuSchema` 工厂函数、`Mvu.events` 双发、`getAllVariables`、`setChatMessages`）+ 多开场白翻页/直跳/初始态补丁 + `resources/read` 动态外链图床 CSP + 每层小铅笔编辑 + 10 楼分页懒加载 + 卡片/预设脚本独立开关 + iframe 折叠精准缩高与 `#send_textarea`/`#send_but` 桥接
+- `v0.7.5`：大卡 PNG 前端解包 + 384 KB 分片上传 + 真·通用 MVU Zod v4 / 完整 `lodash-es` 后台常驻沙箱（`registerMvuSchema` 工厂函数、`Mvu.events` 双发、`getAllVariables`、`setChatMessages`）+ 多开场白翻页/直跳/初始态补丁 + `resources/read` 动态外链图床 CSP + 每层小铅笔编辑 + 10 楼分页懒加载 + 卡片/预设脚本独立开关 + iframe 折叠精准缩高与 `#send_textarea`/`#send_but` 桥接
+- `v0.8.0`（当前）：记忆插件基础版（顶部独立「记忆」Tab + 总开关 + 提示词约束每轮 ~200 字 `<memory_summary>` + 精确按楼滑动窗口仅喂最新 N 楼完整正文/更早楼层全给小总结 + 逐楼时间线编辑补写 + 正文折叠展示）与 Phase 2–4 进阶记忆/外部 API 规划

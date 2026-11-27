@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { RegexScript } from '../core/types';
 import { applyRegexScripts, foldUnknownCustomTags, splitFloorSegments } from '../core/regex-engine';
+import { extractMemorySummary, stripMemorySummaryTags } from '../core/memory-engine';
 import { buildSandboxedSrcDoc, parseSlashCommandAction } from './sandbox-shim';
 
 interface FloorRendererProps {
@@ -10,6 +11,8 @@ interface FloorRendererProps {
   regexScripts: RegexScript[];
   enableRegex: boolean;
   unknownTagMode?: 'fold' | 'keep' | 'hide';
+  memorySummary?: string;
+  memorySummaryDisplayMode?: 'fold' | 'hide';
   charName: string;
   userName: string;
   statData: Record<string, unknown>;
@@ -167,6 +170,8 @@ export function FloorRenderer({
   regexScripts,
   enableRegex,
   unknownTagMode = 'fold',
+  memorySummary,
+  memorySummaryDisplayMode = 'fold',
   charName,
   userName,
   statData,
@@ -178,16 +183,25 @@ export function FloorRenderer({
   onUpdateStatData,
   onSelectGreeting,
 }: FloorRendererProps) {
+  const { cleanNarrative, resolvedSummary } = useMemo(() => {
+    const extracted = extractMemorySummary(narrative);
+    const cleaned = stripMemorySummaryTags(narrative);
+    return {
+      cleanNarrative: cleaned,
+      resolvedSummary: (memorySummary && memorySummary.trim()) || extracted.summary || '',
+    };
+  }, [narrative, memorySummary]);
+
   const segments = useMemo(() => {
     if (!enableRegex) {
-      return [{ kind: 'text' as const, content: narrative }];
+      return [{ kind: 'text' as const, content: cleanNarrative }];
     }
 
     // 1. Run preset & card display regex scripts FIRST (strict SillyTavern order)
     //    so every preset's own option cards, CoT panels, and card status bars render faithfully.
     const afterRegex =
       regexScripts.length > 0
-        ? applyRegexScripts(narrative, regexScripts, {
+        ? applyRegexScripts(cleanNarrative, regexScripts, {
             placement: 2,
             target: 'display',
             depth,
@@ -198,7 +212,7 @@ export function FloorRenderer({
               statData,
             },
           })
-        : narrative;
+        : cleanNarrative;
 
     // 2. Generic post-regex fallback: unwrap prose containers (<content>/<narrative>),
     //    clean unconsumed empty placeholders (<StatusPlaceHolderImpl/>), and handle ANY
@@ -207,7 +221,7 @@ export function FloorRenderer({
 
     // 3. Deterministic 3-way split (text / static html / CSS+JS sandboxed widget)
     return splitFloorSegments(afterGenericFallback);
-  }, [narrative, depth, regexScripts, enableRegex, unknownTagMode, charName, userName, statData]);
+  }, [cleanNarrative, depth, regexScripts, enableRegex, unknownTagMode, charName, userName, statData]);
 
   return (
     <div className="floor-segments">
@@ -230,7 +244,7 @@ export function FloorRenderer({
             html={seg.html}
             title={seg.title}
             messageId={messageId}
-            rawNarrative={narrative}
+            rawNarrative={cleanNarrative}
             charName={charName}
             userName={userName}
             statData={statData}
@@ -244,6 +258,12 @@ export function FloorRenderer({
           />
         );
       })}
+      {resolvedSummary && memorySummaryDisplayMode !== 'hide' && (
+        <details className="memory-summary-fold">
+          <summary>记忆摘要 · {resolvedSummary.length} 字</summary>
+          <div className="memory-summary-body">{resolvedSummary}</div>
+        </details>
+      )}
     </div>
   );
 }

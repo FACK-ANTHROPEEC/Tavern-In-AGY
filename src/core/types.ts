@@ -117,6 +117,8 @@ export interface StoryTurn {
   userMessage?: string;
   narrative: string;
   thought?: string;
+  /** Per-turn concise plot summary (~200 chars) used when this floor falls outside the full-prose window */
+  memorySummary?: string;
   statsSnapshot?: {
     location?: string;
     timeOfDay?: string;
@@ -128,6 +130,19 @@ export interface StoryTurn {
   statData?: Record<string, unknown>;
   options?: Array<{ label: string; category: string; text: string }>;
   createdAt: string;
+}
+
+export interface MemoryPluginConfig {
+  /** Master toggle for per-turn summary prompt injection & sliding-window history compression */
+  enabled: boolean;
+  /** Number of latest floors (each user input = 1 floor, each assistant narrative = 1 floor) sent in full prose */
+  recentFullFloors: number;
+  /** Target character length hint for the per-turn summary (default 200) */
+  summaryLengthHint: number;
+  /** Optional custom instruction prompt overriding the built-in summary contract */
+  customPrompt?: string;
+  /** How <memory_summary> is displayed in the side-pane reader: 'fold' (collapsible chip) or 'hide' */
+  summaryDisplayMode?: 'fold' | 'hide';
 }
 
 export interface PendingForkContext {
@@ -160,6 +175,8 @@ export interface SessionRuntime {
   pendingDirectorInputAt?: number;
   /** Fallback user message captured by PreInvocation in case story_commit_turn omits userMessage */
   lastUserInputForCommit?: string;
+  /** Tracks whether [Memory Summary Contract] has already been injected in this session */
+  memoryContractInjected?: boolean;
 }
 
 export interface SessionSnapshot {
@@ -217,6 +234,8 @@ export interface TavernConfig {
   activeGreetingIndices?: Record<string, number>;
   /** Number of recent floors (user + assistant messages) shown by default before clicking "load earlier" (default 10 = 5 turns) */
   visibleFloorLimit?: number;
+  /** Memory & sliding-window summary plugin configuration */
+  memoryPlugin?: MemoryPluginConfig;
 }
 
 export function createDefaultState(): LiveCharacterState {

@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App } from '@modelcontextprotocol/ext-apps';
 import { z as zod4 } from 'zod4';
 import * as lodash from 'lodash-es';
-import type { RegexScript } from '../core/types';
+import type { MemoryPluginConfig, RegexScript } from '../core/types';
+import { resolveMemoryPluginConfig, splitTurnsByRecentFloors } from '../core/memory-engine';
 import { MvuTreeView } from './MvuTreeView';
 import { TavernFrontendHost, type CardFrontendPayload } from './TavernFrontendHost';
 import { MvuZodRuntimeHost } from './MvuZodRuntimeHost';
@@ -114,6 +115,7 @@ interface StoryTurnItem {
   index: number;
   userMessage?: string;
   narrative: string;
+  memorySummary?: string;
   statsSnapshot?: {
     location?: string;
     mood?: string;
@@ -152,6 +154,7 @@ interface TavernConfig {
   authorsNote?: string;
   authorsNoteEnabled?: boolean;
   visibleFloorLimit?: number;
+  memoryPlugin?: MemoryPluginConfig;
 }
 
 interface BootstrapData {
@@ -169,7 +172,7 @@ interface BootstrapData {
   dataDir: string;
 }
 
-type TabKey = 'chat' | 'cards' | 'presets' | 'lorebooks' | 'state';
+type TabKey = 'chat' | 'cards' | 'presets' | 'lorebooks' | 'memory' | 'state';
 
 export function AppView() {
   const appRef = useRef<App | null>(null);
@@ -208,6 +211,12 @@ export function AppView() {
   const [authorsNoteDraft, setAuthorsNoteDraft] = useState<string>('');
   const [userNameDraft, setUserNameDraft] = useState<string>('');
   const [userPersonaDraft, setUserPersonaDraft] = useState<string>('');
+  const [memoryPromptDraft, setMemoryPromptDraft] = useState<string>('');
+  const [recentFloorsDraft, setRecentFloorsDraft] = useState<string>('10');
+  const [summaryLengthDraft, setSummaryLengthDraft] = useState<string>('200');
+  const [visibleFloorLimitDraft, setVisibleFloorLimitDraft] = useState<string>('10');
+  const [editingSummaryTurnId, setEditingSummaryTurnId] = useState<string | null>(null);
+  const [editingSummaryDraft, setEditingSummaryDraft] = useState<string>('');
 
   useEffect(() => {
     const app = new App({ name: 'TavernInAGY', version: '0.7.0' }, {});
@@ -233,7 +242,7 @@ export function AppView() {
             ? [
                 ...prev.storyTurns.filter((t) => t.turnId !== sc.committedTurn!.turnId),
                 sc.committedTurn,
-              ].slice(-50)
+              ].slice(-200)
             : prev.storyTurns;
           return {
             ...prev,
@@ -289,13 +298,34 @@ export function AppView() {
       });
   }, []);
 
-  // Sync controlled text drafts whenever persisted config updates
+  // Sync controlled text & numeric drafts whenever persisted config updates
   useEffect(() => {
     if (!data?.config) return;
     setAuthorsNoteDraft(data.config.authorsNote ?? '');
     setUserNameDraft(data.config.userName ?? '');
     setUserPersonaDraft(data.config.userPersona ?? '');
-  }, [data?.config.authorsNote, data?.config.userName, data?.config.userPersona]);
+    setMemoryPromptDraft(data.config.memoryPlugin?.customPrompt ?? '');
+    setRecentFloorsDraft(String(data.config.memoryPlugin?.recentFullFloors ?? 10));
+    setSummaryLengthDraft(String(data.config.memoryPlugin?.summaryLengthHint ?? 200));
+    setVisibleFloorLimitDraft(String(data.config.visibleFloorLimit ?? 10));
+  }, [
+    data?.config.authorsNote,
+    data?.config.userName,
+    data?.config.userPersona,
+    data?.config.memoryPlugin?.customPrompt,
+    data?.config.memoryPlugin?.recentFullFloors,
+    data?.config.memoryPlugin?.summaryLengthHint,
+    data?.config.visibleFloorLimit,
+  ]);
+
+  // Reset transient editing & pagination state whenever active card or playthrough slot switches
+  useEffect(() => {
+    setEditingTurnId(null);
+    setEditingOpening(false);
+    setEditingSummaryTurnId(null);
+    setJumpingGreeting(false);
+    setExtraLoadedTurns(0);
+  }, [data?.config.activeCardId, data?.activeChatSlot]);
 
   // Keep composerTextRef synced and bridge native `input` events dispatched by preset option widgets
   useEffect(() => {
@@ -757,8 +787,11 @@ export function AppView() {
         <button className={`tab-btn ${tab === 'lorebooks' ? 'active' : ''}`} onClick={() => setTab('lorebooks')}>
           世界书 ({data.lorebooks.length + (activeCard?.hasEmbeddedLorebook ? 1 : 0)})
         </button>
+        <button className={`tab-btn ${tab === 'memory' ? 'active' : ''}`} onClick={() => setTab('memory')}>
+          记忆{data.config.memoryPlugin?.enabled ? ' ●' : ''}
+        </button>
         <button className={`tab-btn ${tab === 'state' ? 'active' : ''}`} onClick={() => setTab('state')}>
-          状态
+          状态与设置
         </button>
       </div>
 
@@ -1064,6 +1097,8 @@ export function AppView() {
                         regexScripts={data.activeDisplayRegexScripts ?? []}
                         enableRegex={enableRegexBeautify}
                         unknownTagMode={unknownTagMode}
+                        memorySummary={t.memorySummary}
+                        memorySummaryDisplayMode={data.config.memoryPlugin?.summaryDisplayMode ?? 'fold'}
                         charName={activeCard?.name ?? '角色'}
                         userName={data.config.userName || 'User'}
                         statData={data.statData ?? {}}
@@ -1199,19 +1234,6 @@ export function AppView() {
 
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
                 <button
-                  className={`btn btn-xs ${data.config.directorMode ? 'btn-primary' : ''}`}
-                  style={{ whiteSpace: 'nowrap' }}
-                  onClick={() =>
-                    callTool('story_app_update_config', {
-                      directorMode: !data.config.directorMode,
-                      ...(!data.config.directorMode ? { statelessPerTurn: false } : {}),
-                    })
-                  }
-                  title="单窗口导演模式（需在左侧选择 story-director）"
-                >
-                  {data.config.directorMode ? '导演：开' : '导演：关'}
-                </button>
-                <button
                   className="btn btn-xs"
                   style={{ whiteSpace: 'nowrap' }}
                   onClick={() =>
@@ -1223,16 +1245,6 @@ export function AppView() {
                 >
                   {enableRegexBeautify ? '正则：开' : '正则：关'}
                 </button>
-                {!data.config.directorMode && (
-                  <button
-                    className="btn btn-xs"
-                    style={{ whiteSpace: 'nowrap' }}
-                    onClick={handleForkBranch}
-                    title="编辑或删楼后，拉起新分支无缝续写"
-                  >
-                    ✨ 分支续写
-                  </button>
-                )}
               </div>
             </div>
 
@@ -1256,7 +1268,7 @@ export function AppView() {
               </div>
               <div className="muted">
                 💡 新建对话时在输入框下方的 Agent 选择器中切换至{' '}
-                <strong>{data.config.directorMode ? 'story-director' : 'story-writer'}</strong>
+                <strong>story-director</strong>
                 ，在此一键切卡即刻生效。
               </div>
               {data.cards.length === 0 && (
@@ -1843,6 +1855,281 @@ export function AppView() {
             </div>
           )}
 
+          {tab === 'memory' && (() => {
+            const memCfg = resolveMemoryPluginConfig(data.config.memoryPlugin);
+            const turns = data.storyTurns ?? [];
+            const split = splitTurnsByRecentFloors(turns, memCfg.recentFullFloors);
+            const summarizedIds = new Set(split.summarizedTurns.map((t) => t.turnId));
+            const summarizedWithText = turns.filter((t) => Boolean(t.memorySummary?.trim())).length;
+
+            const patchMemory = (patch: Partial<MemoryPluginConfig>, msg?: string) =>
+              callTool('story_app_update_config', { memoryPlugin: patch }).then(() => {
+                if (msg) setStatusMsg(msg);
+              });
+
+            return (
+              <>
+                <div className="card-box">
+                  <div className="row" style={{ alignItems: 'center' }}>
+                    <div>
+                      <strong>🧠 记忆插件（滑动窗口 + 逐楼小总结）</strong>
+                      <div className="muted" style={{ marginTop: 2 }}>
+                        开启后，每轮正文末尾要求模型附带约 {memCfg.summaryLengthHint} 字 <code>&lt;memory_summary&gt;</code>；发送上下文时仅最新 {memCfg.recentFullFloors} 楼喂完整正文，更早楼层全部只喂小总结。
+                      </div>
+                    </div>
+                    <button
+                      className={`btn ${memCfg.enabled ? 'btn-primary' : ''}`}
+                      onClick={() =>
+                        patchMemory(
+                          { enabled: !memCfg.enabled },
+                          !memCfg.enabled ? '记忆插件已开启' : '记忆插件已关闭（恢复全量历史）',
+                        )
+                      }
+                    >
+                      {memCfg.enabled ? '● 总开关：已开启' : '○ 总开关：已关闭'}
+                    </button>
+                  </div>
+
+                  <div className="mem-stats-bar">
+                    <span>
+                      当前存档：<strong>{split.totalFloors}</strong> 楼（{turns.length} 轮）
+                    </span>
+                    <span>
+                      全量正文窗口：<strong>{memCfg.enabled ? split.fullFloorCount : split.totalFloors}</strong> 楼
+                    </span>
+                    <span>
+                      摘要压缩：<strong>{memCfg.enabled ? split.summarizedFloorCount : 0}</strong> 楼
+                    </span>
+                    <span>
+                      已有小总结：<strong>{summarizedWithText}/{turns.length}</strong> 轮
+                    </span>
+                  </div>
+                </div>
+
+                <div className="card-box">
+                  <div className="row" style={{ alignItems: 'center', marginBottom: 8 }}>
+                    <div>
+                      <strong>完整正文保留楼层数</strong>
+                      <div className="muted">
+                        玩家输入与 AI 正文各算 1 楼（例如 10 楼 = 最近 5 轮完整对话）
+                      </div>
+                    </div>
+                    <div className="row-actions" style={{ alignItems: 'center', gap: 6 }}>
+                      <input
+                        type="number"
+                        min={1}
+                        max={200}
+                        className="input"
+                        style={{ width: 72, textAlign: 'center', padding: '4px 6px' }}
+                        value={recentFloorsDraft}
+                        onChange={(e) => setRecentFloorsDraft(e.target.value)}
+                        onBlur={() => {
+                          const v = parseInt(recentFloorsDraft, 10);
+                          if (Number.isFinite(v)) {
+                            const clamped = Math.max(1, Math.min(200, v));
+                            setRecentFloorsDraft(String(clamped));
+                            if (clamped !== memCfg.recentFullFloors) {
+                              patchMemory({ recentFullFloors: clamped }, `完整正文窗口已设为最新 ${clamped} 楼`);
+                            }
+                          } else {
+                            setRecentFloorsDraft(String(memCfg.recentFullFloors));
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                        }}
+                      />
+                      <span className="muted">楼</span>
+                    </div>
+                  </div>
+                  <div className="row-actions" style={{ flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+                    {[6, 7, 8, 10, 12, 16, 20].map((n) => (
+                      <button
+                        key={n}
+                        className={`btn btn-xs ${memCfg.recentFullFloors === n ? 'btn-primary' : ''}`}
+                        onClick={() => patchMemory({ recentFullFloors: n }, `完整正文窗口已设为最新 ${n} 楼`)}
+                      >
+                        {n} 楼
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="row" style={{ alignItems: 'center', marginBottom: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+                    <div>
+                      <strong>小总结目标字数</strong>
+                      <div className="muted">提示词中建议模型每轮总结的字数（默认 200 字）</div>
+                    </div>
+                    <div className="row-actions" style={{ alignItems: 'center', gap: 6 }}>
+                      {[120, 200, 300].map((len) => (
+                        <button
+                          key={len}
+                          className={`btn btn-xs ${memCfg.summaryLengthHint === len ? 'btn-primary' : ''}`}
+                          onClick={() => patchMemory({ summaryLengthHint: len })}
+                        >
+                          {len}字
+                        </button>
+                      ))}
+                      <input
+                        type="number"
+                        min={50}
+                        max={800}
+                        step={20}
+                        className="input"
+                        style={{ width: 68, textAlign: 'center', padding: '4px 6px' }}
+                        value={summaryLengthDraft}
+                        onChange={(e) => setSummaryLengthDraft(e.target.value)}
+                        onBlur={() => {
+                          const v = parseInt(summaryLengthDraft, 10);
+                          if (Number.isFinite(v)) {
+                            const clamped = Math.max(50, Math.min(800, v));
+                            setSummaryLengthDraft(String(clamped));
+                            if (clamped !== memCfg.summaryLengthHint) {
+                              patchMemory({ summaryLengthHint: clamped });
+                            }
+                          } else {
+                            setSummaryLengthDraft(String(memCfg.summaryLengthHint));
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="row" style={{ alignItems: 'center', paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+                    <div>
+                      <strong>正文阅读器内显示方式</strong>
+                      <div className="muted">控制每楼末尾 <code>&lt;memory_summary&gt;</code> 在正文区的展示</div>
+                    </div>
+                    <div className="row-actions" style={{ gap: 6 }}>
+                      <button
+                        className={`btn btn-xs ${memCfg.summaryDisplayMode !== 'hide' ? 'btn-primary' : ''}`}
+                        onClick={() => patchMemory({ summaryDisplayMode: 'fold' })}
+                      >
+                        折叠小条
+                      </button>
+                      <button
+                        className={`btn btn-xs ${memCfg.summaryDisplayMode === 'hide' ? 'btn-primary' : ''}`}
+                        onClick={() => patchMemory({ summaryDisplayMode: 'hide' })}
+                      >
+                        正文内隐藏
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+                    <div className="row" style={{ alignItems: 'center', marginBottom: 4 }}>
+                      <strong>自定义摘要提示词（可选）</strong>
+                      <button
+                        className="btn btn-xs btn-primary"
+                        onClick={() =>
+                          patchMemory({ customPrompt: memoryPromptDraft }, '记忆摘要提示词已保存')
+                        }
+                      >
+                        保存提示词
+                      </button>
+                    </div>
+                    <div className="muted" style={{ marginBottom: 6 }}>
+                      留空将使用内置标准中文约束（支持 <code>{'{{length}}'}</code> 占位符引用目标字数）。
+                    </div>
+                    <textarea
+                      className="textarea"
+                      style={{ minHeight: 68 }}
+                      placeholder="留空则使用内置标准约束：要求模型在每轮末尾输出约 {{length}} 字的 <memory_summary>...</memory_summary> 客观剧情小总结。"
+                      value={memoryPromptDraft}
+                      onChange={(e) => setMemoryPromptDraft(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="card-box">
+                  <div className="row" style={{ alignItems: 'center', marginBottom: 8 }}>
+                    <strong>📜 逐楼记忆时间线（{turns.length} 轮）</strong>
+                    <span className="muted">可手动修改或为历史旧楼补写小总结</span>
+                  </div>
+                  {turns.length === 0 ? (
+                    <div className="muted">当前存档还没有楼层记录，开始演绎后每轮摘要会自动汇总在这里。</div>
+                  ) : (
+                    <div className="mem-timeline">
+                      {turns.map((t) => {
+                        const isCompressed = memCfg.enabled && summarizedIds.has(t.turnId);
+                        const isEditingMem = editingSummaryTurnId === t.turnId;
+                        return (
+                          <div key={t.turnId} className="mem-turn-item">
+                            <div className="row" style={{ alignItems: 'center', marginBottom: 4 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <strong>#{t.index}</strong>
+                                <span className={`mem-badge ${isCompressed ? 'compressed' : 'full'}`}>
+                                  {isCompressed ? '已摘要压缩' : '全量正文窗口'}
+                                </span>
+                                {!t.memorySummary?.trim() && (
+                                  <span className="mem-badge missing">待补写（自动摘录降级）</span>
+                                )}
+                              </div>
+                              <div className="row-actions" style={{ gap: 4 }}>
+                                {isEditingMem ? (
+                                  <>
+                                    <button
+                                      className="btn btn-xs btn-primary"
+                                      onClick={async () => {
+                                        await callTool('story_app_edit_turn_summary', {
+                                          turnId: t.turnId,
+                                          memorySummary: editingSummaryDraft,
+                                        });
+                                        setEditingSummaryTurnId(null);
+                                        setStatusMsg(`已保存第 #${t.index} 楼记忆摘要`);
+                                      }}
+                                    >
+                                      保存
+                                    </button>
+                                    <button
+                                      className="btn btn-xs"
+                                      onClick={() => setEditingSummaryTurnId(null)}
+                                    >
+                                      取消
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    className="btn btn-xs"
+                                    onClick={() => {
+                                      setEditingSummaryTurnId(t.turnId);
+                                      setEditingSummaryDraft(t.memorySummary ?? '');
+                                    }}
+                                  >
+                                    {t.memorySummary?.trim() ? '编辑' : '补写'}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            {isEditingMem ? (
+                              <textarea
+                                className="textarea"
+                                style={{ minHeight: 72 }}
+                                placeholder="输入本楼约 200 字客观剧情小总结..."
+                                value={editingSummaryDraft}
+                                onChange={(e) => setEditingSummaryDraft(e.target.value)}
+                              />
+                            ) : (
+                              <div className="mem-turn-text">
+                                {t.memorySummary?.trim() || (
+                                  <span className="muted">
+                                    暂无独立摘要；超出全量窗口时将自动截取本楼精简要点喂给模型。
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </>
+            );
+          })()}
+
           {tab === 'state' && (
             <>
               {activeCard &&
@@ -2129,12 +2416,23 @@ export function AppView() {
                     min={2}
                     max={200}
                     step={2}
-                    value={visibleFloorLimit}
-                    onChange={(e) =>
-                      callTool('story_app_update_config', {
-                        visibleFloorLimit: Math.max(2, Math.min(200, Number(e.target.value) || 10)),
-                      })
-                    }
+                    value={visibleFloorLimitDraft}
+                    onChange={(e) => setVisibleFloorLimitDraft(e.target.value)}
+                    onBlur={() => {
+                      const v = parseInt(visibleFloorLimitDraft, 10);
+                      if (Number.isFinite(v)) {
+                        const clamped = Math.max(2, Math.min(200, v));
+                        setVisibleFloorLimitDraft(String(clamped));
+                        if (clamped !== visibleFloorLimit) {
+                          callTool('story_app_update_config', { visibleFloorLimit: clamped });
+                        }
+                      } else {
+                        setVisibleFloorLimitDraft(String(visibleFloorLimit));
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                    }}
                   />
                 </div>
                 <div className="row">
@@ -2206,43 +2504,15 @@ export function AppView() {
               )}
 
               <div className="card-box">
-                <strong>上下文与省额度策略（AGY 缓存优化）</strong>
+                <strong>运行架构（单窗口导演模式）</strong>
                 <div className="row">
                   <div>
-                    <div>单窗口导演模式（推荐 · 配合左侧 <code>story-director</code>）</div>
+                    <div>单窗口导演模式（已启用 · 配合左侧 <code>story-director</code>）</div>
                     <div className="muted">
                       主窗口零注入、不刷屏左侧列表；每轮自动派发全新 <code>story-writer</code> 子智能体全量重拼上下文落笔，写完立即销毁。
                     </div>
                   </div>
-                  <label className="st-switch" style={{ flexShrink: 0 }}>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(data.config.directorMode)}
-                      onChange={(e) =>
-                        callTool('story_app_update_config', {
-                          directorMode: e.target.checked,
-                          statelessPerTurn: false,
-                        })
-                      }
-                    />
-                    <span className="st-slider" />
-                  </label>
-                </div>
-                <div className="row">
-                  <span className="muted">预设后半段周期提醒（0 = 仅首轮钉死，最省额度）</span>
-                  <input
-                    type="number"
-                    className="input"
-                    style={{ width: 72 }}
-                    min={0}
-                    max={50}
-                    value={data.config.postHistoryRefreshInterval}
-                    onChange={(e) =>
-                      callTool('story_app_update_config', {
-                        postHistoryRefreshInterval: Math.max(0, Number(e.target.value) || 0),
-                      })
-                    }
-                  />
+                  <span className="mem-badge full" style={{ flexShrink: 0 }}>默认启用</span>
                 </div>
               </div>
             </>

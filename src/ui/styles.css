@@ -283,7 +283,7 @@ body {
 
 .tabs {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 4px;
   background: var(--ink-header);
   padding: 4px;
@@ -292,7 +292,7 @@ body {
 }
 
 .tab-btn {
-  padding: 6px 4px;
+  padding: 6px 2px;
   border-radius: 2px;
   border: 1px solid transparent;
   background: transparent;
@@ -300,6 +300,9 @@ body {
   cursor: pointer;
   font-family: var(--font-serif);
   font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: all 0.15s ease;
 }
 
@@ -698,4 +701,87 @@ body {
   color: var(--ink-text-bright);
   text-align: right;
   word-break: break-word;
+}
+
+/* Memory Plugin & Reader Summary Fold */
+.memory-summary-fold {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px dashed var(--border);
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.memory-summary-fold > summary {
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.memory-summary-body {
+  margin-top: 6px;
+  line-height: 1.6;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.mem-stats-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mem-stats-bar strong {
+  color: var(--ink);
+}
+
+.mem-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mem-turn-item {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.mem-turn-text {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+
+.mem-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+}
+
+.mem-badge.full {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.mem-badge.compressed {
+  color: #8fbc8f;
+  border-color: rgba(143, 188, 143, 0.45);
+}
+
+.mem-badge.missing {
+  color: #d4a373;
+  border-color: rgba(212, 163, 115, 0.45);
 }

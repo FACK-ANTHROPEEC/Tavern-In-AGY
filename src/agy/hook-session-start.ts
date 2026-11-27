@@ -100,7 +100,7 @@ async function main(): Promise<void> {
       pendingFork.turns,
       card.name,
       config.userName || 'User',
-      { maxContextTokens: 150_000 },
+      { maxContextTokens: 150_000, memoryPlugin: config.memoryPlugin },
       activeRegexScripts,
     );
   } else {
@@ -115,7 +115,7 @@ async function main(): Promise<void> {
         existingTurns,
         card.name,
         config.userName || 'User',
-        { maxContextTokens: 150_000 },
+        { maxContextTokens: 150_000, memoryPlugin: config.memoryPlugin },
         activeRegexScripts,
       );
     }

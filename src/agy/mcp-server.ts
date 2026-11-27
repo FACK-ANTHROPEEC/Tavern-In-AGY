@@ -10,6 +10,7 @@ import { parsePresetJson } from '../core/preset-parser.js';
 import { parseLorebookJson, scanLorebooks } from '../core/lorebook-engine.js';
 import { StoryLogStore, resolveStoryKey } from '../core/story-log.js';
 import { applyMvuUpdates, extractInitVarFromLorebooks } from '../core/mvu-engine.js';
+import { extractMemorySummary, resolveMemoryPluginConfig } from '../core/memory-engine.js';
 import { createDefaultState, type CharacterCard, type Lorebook, type TavernConfig } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -432,10 +433,19 @@ server.registerTool(
     storage.saveSession(session);
 
     const storyKey = getActiveStoryKey(config);
+    const cleanedNarrative = mvuRes.cleanedText || args.narrative;
+    const extractedMem = extractMemorySummary(cleanedNarrative);
+    const persistedNarrative =
+      extractedMem.matchedTag === 'memory_summary' ? extractedMem.strippedText : cleanedNarrative;
+    const resolvedMemorySummary =
+      extractedMem.summary ||
+      (args.summary && args.summary.trim()) ||
+      undefined;
     const turn = storyLog.appendTurn(storyKey, {
       userMessage: resolvedUserMessage,
-      narrative: mvuRes.cleanedText || args.narrative,
+      narrative: persistedNarrative,
       thought: args.thought ?? undefined,
+      memorySummary: resolvedMemorySummary,
       statsSnapshot: {
         location: st.location,
         timeOfDay: st.timeOfDay,
@@ -1064,12 +1074,28 @@ server.registerTool(
       authorsNote: z.string().optional(),
       authorsNoteEnabled: z.boolean().optional(),
       visibleFloorLimit: z.number().int().min(2).max(200).optional(),
+      memoryPlugin: z
+        .object({
+          enabled: z.boolean().optional(),
+          recentFullFloors: z.number().int().min(1).max(200).optional(),
+          summaryLengthHint: z.number().int().min(50).max(800).optional(),
+          customPrompt: z.string().optional(),
+          summaryDisplayMode: z.enum(['fold', 'hide']).optional(),
+        })
+        .optional(),
     },
     _meta: APP_ONLY_META,
   },
   async (patch) => {
     const prev = storage.getConfig();
-    const next = storage.saveConfig(patch);
+    const mergedPatch: Partial<TavernConfig> = { ...patch } as Partial<TavernConfig>;
+    if (patch.memoryPlugin) {
+      mergedPatch.memoryPlugin = resolveMemoryPluginConfig({
+        ...prev.memoryPlugin,
+        ...patch.memoryPlugin,
+      });
+    }
+    const next = storage.saveConfig(mergedPatch);
     // When switching active card, restore active chat slot's statData or card [initvar]
     if (patch.activeCardId !== undefined && patch.activeCardId !== prev.activeCardId) {
       if (patch.activeCardId) {
@@ -1304,6 +1330,27 @@ server.registerTool(
     storyLog.editTurn(getActiveStoryKey(config), turnId, narrative);
     return {
       content: [{ type: 'text', text: 'turn edited' }],
+      structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'story_app_edit_turn_summary',
+  {
+    title: 'Edit Story Turn Memory Summary',
+    description: 'Edit or backfill the concise memorySummary for a specific turn in the JSONL story log.',
+    inputSchema: {
+      turnId: z.string(),
+      memorySummary: z.string(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ turnId, memorySummary }) => {
+    const config = storage.getConfig();
+    storyLog.editTurnSummary(getActiveStoryKey(config), turnId, memorySummary);
+    return {
+      content: [{ type: 'text', text: 'turn memory summary updated' }],
       structuredContent: buildBootstrapPayload(),
     };
   },

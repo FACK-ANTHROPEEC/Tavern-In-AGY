@@ -25,8 +25,12 @@ export function MvuZodRuntimeHost({
   onSchemaCountChange,
 }: MvuZodRuntimeHostProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const iframeLoadedRef = useRef<boolean>(false);
   const lastPushedJsonRef = useRef<string>('');
+  const latestStatDataRef = useRef<Record<string, unknown>>(statData ?? {});
   const widgetId = useMemo(() => `mvuzod-${Math.random().toString(36).slice(2, 9)}`, []);
+
+  latestStatDataRef.current = statData ?? {};
 
   const enabledScripts = frontend?.helperScripts ?? [];
   const scriptsSignature = useMemo(
@@ -39,6 +43,7 @@ export function MvuZodRuntimeHost({
 
   useEffect(() => {
     onSchemaCountChange?.(0);
+    iframeLoadedRef.current = false;
     lastPushedJsonRef.current = '';
   }, [scriptsSignature, onSchemaCountChange]);
 
@@ -61,7 +66,7 @@ export function MvuZodRuntimeHost({
   }, [widgetId, onUpdateStatData, onSchemaCountChange]);
 
   useEffect(() => {
-    if (!scriptsSignature) return;
+    if (!scriptsSignature || !iframeLoadedRef.current) return;
     const curJson = JSON.stringify(statData ?? {});
     if (curJson === lastPushedJsonRef.current) return;
     lastPushedJsonRef.current = curJson;
@@ -98,6 +103,22 @@ export function MvuZodRuntimeHost({
       title="MVU Zod Background Sandbox"
       sandbox="allow-scripts allow-same-origin"
       srcDoc={srcDoc}
+      onLoad={() => {
+        iframeLoadedRef.current = true;
+        const latest = latestStatDataRef.current;
+        const curJson = JSON.stringify(latest ?? {});
+        if (curJson !== lastPushedJsonRef.current) {
+          lastPushedJsonRef.current = curJson;
+          try {
+            iframeRef.current?.contentWindow?.postMessage(
+              { type: 'tavern:statSync', statData: latest },
+              '*',
+            );
+          } catch {
+            // ignore
+          }
+        }
+      }}
       style={{ display: 'none', width: 0, height: 0, border: 0 }}
     />
   );

@@ -1,7 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ChatSlotSummary, RegexScript, StoryTurn } from './types.js';
+import type { ChatSlotSummary, MemoryPluginConfig, RegexScript, StoryTurn } from './types.js';
 import { applyRegexScripts } from './regex-engine.js';
+import {
+  buildFallbackSummary,
+  extractMemorySummary,
+  resolveMemoryPluginConfig,
+  splitTurnsByRecentFloors,
+  stripMemorySummaryTags,
+} from './memory-engine.js';
 
 function safeKey(key: string): string {
   return key.replace(/[^a-zA-Z0-9_\-\u4e00-\u9fa5]/g, '_');
@@ -39,6 +46,8 @@ export interface ResumeBudgetOptions {
   maxContextBytes?: number;
   /** Optional explicit turn cap; 0 or omitted means unlimited (bounded only by context budget). */
   maxTurns?: number;
+  /** Optional memory plugin config; when enabled, only recentFullFloors are sent in full prose and earlier turns are condensed to memorySummary. */
+  memoryPlugin?: Partial<MemoryPluginConfig>;
 }
 
 export class StoryLogStore {
@@ -158,7 +167,27 @@ export class StoryLogStore {
     const turns = this.readTurns(storyKey);
     const target = turns.find((t) => t.turnId === turnId);
     if (target) {
-      target.narrative = narrative;
+      const extracted = extractMemorySummary(narrative);
+      // Only strip our own <memory_summary> tag so editing prose never overwrites a manually edited summary later
+      target.narrative = extracted.matchedTag === 'memory_summary' ? extracted.strippedText : narrative;
+      if (extracted.summary) {
+        target.memorySummary = extracted.summary;
+      }
+      this.rewrite(storyKey, turns);
+    }
+    return turns;
+  }
+
+  editTurnSummary(storyKey: string, turnId: string, memorySummary: string): StoryTurn[] {
+    const turns = this.readTurns(storyKey);
+    const target = turns.find((t) => t.turnId === turnId);
+    if (target) {
+      const cleaned = memorySummary.trim();
+      if (cleaned) {
+        target.memorySummary = cleaned;
+      } else {
+        delete target.memorySummary;
+      }
       this.rewrite(storyKey, turns);
     }
     return turns;
@@ -196,14 +225,128 @@ export class StoryLogStore {
     const candidateTurns =
       opts.maxTurns && opts.maxTurns > 0 ? turns.slice(-opts.maxTurns) : turns;
 
-    // Walk backward from the latest turn so recent history is always preserved within the 150k context budget.
+    const memCfg = resolveMemoryPluginConfig(opts.memoryPlugin);
+
+    // Memory plugin mode: older floors are compressed to per-turn summaries, latest N floors stay in full prose.
+    if (memCfg.enabled) {
+      const split = splitTurnsByRecentFloors(candidateTurns, memCfg.recentFullFloors);
+
+      // 1. Build full-prose blocks for the latest N floors first (highest priority in token budget)
+      const fullBlocks: string[] = [];
+      let usedTokens = 0;
+      let usedBytes = 0;
+      let msgDepth = 0;
+
+      for (let i = split.fullEntries.length - 1; i >= 0; i--) {
+        const { turn: t, includeUserFull } = split.fullEntries[i];
+        const aiDepth = msgDepth++;
+        const userDepth = t.userMessage && includeUserFull ? msgDepth++ : aiDepth + 1;
+        const parts: string[] = [];
+        if (t.userMessage && includeUserFull) {
+          const userText =
+            regexScripts.length > 0
+              ? applyRegexScripts(t.userMessage, regexScripts, {
+                  placement: 1,
+                  target: 'prompt',
+                  depth: userDepth,
+                })
+              : t.userMessage;
+          parts.push(`\n### Turn ${t.index} (${userName})\n${userText}`);
+        }
+        const strippedNarrative = stripMemorySummaryTags(t.narrative);
+        const aiText =
+          regexScripts.length > 0
+            ? applyRegexScripts(strippedNarrative, regexScripts, {
+                placement: 2,
+                target: 'prompt',
+                depth: aiDepth,
+              })
+            : strippedNarrative;
+        parts.push(`\n### Turn ${t.index} (${charName})\n${aiText}`);
+
+        const block = parts.join('\n');
+        const blockTokens = estimateContextTokens(block);
+        const blockBytes = Buffer.byteLength(block, 'utf8');
+
+        if (
+          fullBlocks.length > 0 &&
+          (usedTokens + blockTokens > maxContextTokens || usedBytes + blockBytes > maxContextBytes)
+        ) {
+          break;
+        }
+        fullBlocks.push(block);
+        usedTokens += blockTokens;
+        usedBytes += blockBytes;
+      }
+      fullBlocks.reverse();
+
+      // 2. Build compact summary lines for all earlier turns (newest-first budget check, emitted chronologically)
+      // Also preserve boundary turn's userMessage when recentFullFloors is odd (includeUserFull === false)
+      const boundaryEntry = split.fullEntries[0];
+      const boundaryUserLine =
+        boundaryEntry && !boundaryEntry.includeUserFull && boundaryEntry.turn.userMessage?.trim()
+          ? `- [Turn #${boundaryEntry.turn.index} · ${userName}] ${boundaryEntry.turn.userMessage.trim()}`
+          : '';
+
+      const summaryLines: string[] = [];
+      if (boundaryUserLine) {
+        const bTokens = estimateContextTokens(boundaryUserLine);
+        const bBytes = Buffer.byteLength(boundaryUserLine, 'utf8');
+        if (usedTokens + bTokens <= maxContextTokens && usedBytes + bBytes <= maxContextBytes) {
+          summaryLines.push(boundaryUserLine);
+          usedTokens += bTokens;
+          usedBytes += bBytes;
+        }
+      }
+      for (let i = split.summarizedTurns.length - 1; i >= 0; i--) {
+        const t = split.summarizedTurns[i];
+        const text =
+          (t.memorySummary && t.memorySummary.trim()) ||
+          extractMemorySummary(t.narrative).summary ||
+          buildFallbackSummary(t, Math.max(160, memCfg.summaryLengthHint));
+        const line = `- [Turn #${t.index}] ${text}`;
+        const lineTokens = estimateContextTokens(line);
+        const lineBytes = Buffer.byteLength(line, 'utf8');
+        if (usedTokens + lineTokens > maxContextTokens || usedBytes + lineBytes > maxContextBytes) {
+          break;
+        }
+        summaryLines.push(line);
+        usedTokens += lineTokens;
+        usedBytes += lineBytes;
+      }
+      summaryLines.reverse();
+
+      const sections: string[] = [];
+      if (summaryLines.length > 0) {
+        const condensedCount = split.summarizedTurns.length;
+        const header =
+          condensedCount > 0
+            ? `[Earlier Story Memory · Turns #${split.summarizedTurns[0]?.index ?? 1}–#${split.summarizedTurns[condensedCount - 1]?.index ?? condensedCount} (${condensedCount} Turns Condensed)]`
+            : '[Earlier Story Memory · Boundary User Input]';
+        sections.push([header, ...summaryLines].join('\n'));
+      }
+      if (fullBlocks.length > 0) {
+        sections.push(
+          [
+            `[Recent Story History · Latest ${split.fullFloorCount} Floors in Full Prose]`,
+            'Continue seamlessly from the exact story state below:',
+            ...fullBlocks,
+          ].join('\n'),
+        );
+      }
+      return sections.join('\n\n');
+    }
+
+    // Standard full-history mode (memory plugin disabled): walk backward from the latest turn within 150k budget.
     const selectedBlocks: string[] = [];
     let usedTokens = 0;
     let usedBytes = 0;
+    let msgDepth = 0;
 
     for (let i = candidateTurns.length - 1; i >= 0; i--) {
       const t = candidateTurns[i];
-      const depth = candidateTurns.length - 1 - i;
+      const aiDepth = msgDepth++;
+      const userDepth = t.userMessage ? msgDepth++ : aiDepth + 1;
       const parts: string[] = [];
       if (t.userMessage) {
         const userText =
@@ -211,7 +354,7 @@ export class StoryLogStore {
             ? applyRegexScripts(t.userMessage, regexScripts, {
                 placement: 1,
                 target: 'prompt',
-                depth,
+                depth: userDepth,
               })
             : t.userMessage;
         parts.push(`\n### Turn ${t.index} (${userName})\n${userText}`);
@@ -221,7 +364,7 @@ export class StoryLogStore {
           ? applyRegexScripts(t.narrative, regexScripts, {
               placement: 2,
               target: 'prompt',
-              depth,
+              depth: aiDepth,
             })
           : t.narrative;
       parts.push(`\n### Turn ${t.index} (${charName})\n${aiText}`);

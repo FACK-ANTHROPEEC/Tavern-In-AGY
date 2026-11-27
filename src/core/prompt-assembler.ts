@@ -12,6 +12,8 @@ import { compilePreset } from './preset-parser.js';
 import { scanLorebooks } from './lorebook-engine.js';
 import { applyMvuUpdates, extractInitVarFromLorebooks } from './mvu-engine.js';
 import { renderEjsTemplate } from './ejs-engine.js';
+import { buildMemoryPromptInstruction } from './memory-engine.js';
+import { resolveStoryKey } from './story-log.js';
 
 export function hashText(text: string): string {
   return crypto.createHash('sha1').update(text).digest('hex').slice(0, 12);
@@ -128,7 +130,7 @@ export function assembleSessionStart(params: {
 
   // Resolve active opening greeting (0 = firstMessage, 1..N = alternateGreetings)
   const activeSlot = config.activeChatSlots?.[card.id] || 'default';
-  const storyKey = activeSlot === 'default' ? card.id : `${card.id}__${activeSlot}`;
+  const storyKey = resolveStoryKey(card.id, activeSlot);
   const allGreetings = [card.firstMessage, ...(card.alternateGreetings ?? [])];
   const rawGreetingIdx = config.activeGreetingIndices?.[storyKey] ?? 0;
   const greetingIdx = Math.max(0, Math.min(Math.max(0, allGreetings.length - 1), rawGreetingIdx));
@@ -247,6 +249,13 @@ export function assembleSessionStart(params: {
     parts.push(deferredPostHistory);
   }
 
+  // Optional Memory Plugin contract: instruct the model to append a concise ~200-char <memory_summary>
+  const memoryContract = buildMemoryPromptInstruction(config.memoryPlugin);
+  session.memoryContractInjected = Boolean(memoryContract);
+  if (memoryContract) {
+    parts.push(memoryContract);
+  }
+
   parts.push(
     '[Story Panel Delivery] Stay 100% in Roleplay mode and do NOT invoke coding, file, shell, or browser tools. Put your full turn output (including any preset CoT/formatting tags and story prose) inside `story_commit_turn(narrative)`. Do not repeat story prose in main chat; end main chat with only a 1-line floor index (e.g., `✦ 第 #N 楼已落笔至侧边栏`).',
   );
@@ -363,6 +372,15 @@ export function assemblePreInvocation(params: {
   if (compactState && stateHash !== session.lastStateInjectedHash) {
     parts.push(compactState);
     injectedState = true;
+  }
+
+  // L3c: If memory plugin was toggled on mid-session (non-director mode), inject contract once
+  const memContract = buildMemoryPromptInstruction(config.memoryPlugin);
+  if (memContract && !session.memoryContractInjected) {
+    parts.push(memContract);
+    session.memoryContractInjected = true;
+  } else if (!memContract && session.memoryContractInjected) {
+    session.memoryContractInjected = false;
   }
 
   return {

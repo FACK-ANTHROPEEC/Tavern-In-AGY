@@ -2,12 +2,11 @@
 
 ## 1. 当前状态与里程碑
 - **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agents `story-director`/`story-writer`）打造的本地互动小说与角色扮演创作引擎（Apache-2.0，零反代、零凭据抽取）。
-- **当前阶段**：**v0.7.5** 已完成测试、全量构建、本地安装并推送至 `origin/main`（`5e14fc5`）。
+- **当前阶段**：**v0.8.0**（记忆插件基础版）已完成实现、测试、全量构建与本地插件安装（待提交推送）。
 - **最近完成**：
-  - **大卡分片导入与前端解包**：新增 `src/ui/png-unpack.ts`（PNG `tEXt`/`iTXt` 本地解包 + `160px` 缩略图）与 `story_app_upload_chunk` 384 KB 分片上传，修复 `callTool` 吞错假报成功，瘦身 `buildBootstrapPayload()`；
-  - **真·通用 MVU Zod v4 + 完整 Lodash 引擎**：引入 `zod4` 别名与 `lodash-es` 挂载至沙箱 `window.z` / `window._`，新增静默后台宿主 `MvuZodRuntimeHost.tsx`，对齐 `registerMvuSchema(schema | () => schema)`、`Mvu.events`（`eventOn` + `document` `CustomEvent` 双发）、`getAllVariables()`、`setChatMessages`（`swipe_id` + `data.stat_data`），后端 `mvu-engine.ts` 补齐 `<json_?patch>` 与 `_.assign`/`_.unset`/`_.add`；
-  - **多开场白 + 图床 CSP + 阅读器打磨**：解析 V2/V3 `alternate_greetings`，支持 `#0` 右下角 `‹ 1/N ›` 翻页/点击数字直跳与卡片内跳转，切开场白自动应用开局 `<update>` 初始态；`resources/read` 的 `contents[0]._meta.ui.csp.resourceDomains` 动态放行外链图床；新增每层小铅笔编辑、默认 10 楼分页懒加载（可配）、卡片/预设脚本独立开关、字号/行距 CSS 修复、iframe 折叠精准缩高与 `#send_textarea`/`#send_but` 选项桥接。
-- **验证状态**：`npm test` **8 套件 / 34 用例全绿（0 skipped）**；`npm run build` & `npm run install:plugin` 通过。
+  - **v0.8.0 记忆插件基础版（滑动窗口 + 逐楼小总结）**：新增 `src/core/memory-engine.ts`，支持总开关、每轮末尾提示词约束生成 ~200 字 `<memory_summary>`（兼容 `<wave_summary>` / `<summary>`）、精确按楼数切分滑动窗口（最新 N 楼完整正文，默认 10 楼可自由调整；更早楼层全部替换为 `[Earlier Story Memory]` 小总结，旧楼无摘要自动摘录降级）；侧边栏顶部新增独立「记忆」Tab（总开关、窗口/字数/显示方式/自定义提示词配置、逐楼时间线编辑补写），阅读器自动折叠/隐藏摘要标签；已在 `DEVELOPMENT.md` 写入 Phase 2–4（分层滚动大总结、结构化记忆簿、外部独立 API 总结）远期路线图。
+  - **v0.7.5 前序里程碑**：大卡 PNG 本地解包 + 384 KB 分片上传；真·通用 MVU Zod v4 + `lodash-es` 后台沙箱；多开场白翻页/直跳；`resources/read` 动态外链图床 CSP；每层小铅笔编辑与 10 楼分页懒加载。
+- **验证状态**：`npm test` **9 套件 / 41 用例全绿（0 skipped）**；`npm run build` & `npm run install:plugin` 通过。
 
 ## 2. 架构约束与关键契约
 - **目录与分层红线**：
@@ -19,12 +18,12 @@
 - **环境约束**：Windows PowerShell 5.1 不支持 `&&`（使用 `; if ($LASTEXITCODE -eq 0) { ... }`）。
 
 ## 3. 下一步计划（按优先级）
-1. 设计并实现 **v0.8.0 正文摘要 / 剧情压缩模块**（分层记忆 + `pinnedSummary` + 历史上下文预算调节），大幅压缩长篇导演模式 Token 消耗。
+1. 记忆插件进阶路线（已记入 `DEVELOPMENT.md`）：Phase 2 分层滚动大总结（摘要森林）→ Phase 3 结构化记忆簿（人物关系/认知/实体/剧情线）→ Phase 4 外部独立 API / 旁路模型异步总结。
 2. 按需实测导演与写手异构模型配对（`inherit` vs `pro`）。
 
 ## 4. 核心文件索引
 - `DEVELOPMENT.md` & `README.md`：全量开发维护手册与公开安装说明
-- `src/core/mvu-engine.ts` / `card-parser.ts` / `preset-parser.ts` / `prompt-assembler.ts` / `story-log.ts`：核心 MVU/EJS/多开场白/15 万预算引擎
-- `src/agy/mcp-server.ts` & `src/agy/hook-*.ts`：MCP Server（动态 CSP、分片上传、脚本/开场白工具）与 20 KB 分块钩子
-- `src/ui/App.tsx` / `png-unpack.ts` / `FloorRenderer.tsx` / `sandbox-shim.ts` / `MvuZodRuntimeHost.tsx`：暖墨直聊阅读器与 MVU Zod 沙箱宿主
+- `src/core/memory-engine.ts` / `mvu-engine.ts` / `card-parser.ts` / `preset-parser.ts` / `prompt-assembler.ts` / `story-log.ts`：核心记忆滑动窗口/MVU/EJS/多开场白/15 万预算引擎
+- `src/agy/mcp-server.ts` & `src/agy/hook-*.ts`：MCP Server（动态 CSP、分片上传、脚本/开场白/记忆摘要工具）与 20 KB 分块钩子
+- `src/ui/App.tsx` / `png-unpack.ts` / `FloorRenderer.tsx` / `sandbox-shim.ts` / `MvuZodRuntimeHost.tsx`：暖墨直聊阅读器、记忆管理页与 MVU Zod 沙箱宿主
 - `plugin/agents/story-director.md` & `story-writer.md`：单窗口导演调度器与纯净写手子智能体
