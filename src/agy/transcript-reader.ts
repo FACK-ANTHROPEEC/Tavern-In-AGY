@@ -54,6 +54,38 @@ function extractTextFromRecord(obj: Record<string, unknown>, depth = 0): string 
 }
 
 /**
+ * Reads a stable stamp (`step_index|created_at`) for the most recent USER_INPUT record
+ * in an Antigravity transcript.jsonl file so PreInvocation can deduplicate all follow-up
+ * LLM calls within the same user turn (e.g. after invoke_subagent or manage_subagents).
+ */
+export function readLastUserInputStamp(transcriptPath: string | undefined): string | null {
+  if (!transcriptPath || !fs.existsSync(transcriptPath)) {
+    return null;
+  }
+  try {
+    const raw = fs.readFileSync(transcriptPath, 'utf8');
+    const lines = raw.split(/\r?\n/).filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const obj = JSON.parse(lines[i]) as Record<string, unknown>;
+        if (obj.type === 'USER_INPUT' || obj.source === 'USER_EXPLICIT') {
+          const step = obj.step_index !== undefined ? String(obj.step_index) : '';
+          const ts = typeof obj.created_at === 'string' ? obj.created_at : '';
+          if (step || ts) {
+            return `${step}|${ts}`;
+          }
+        }
+      } catch {
+        // Ignore malformed lines
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Extracts `<wave_options>...</wave_options>` style numbered action choices
  * from the most recent assistant message for clickable side-pane buttons.
  */

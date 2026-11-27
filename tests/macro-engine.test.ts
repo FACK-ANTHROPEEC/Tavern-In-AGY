@@ -57,4 +57,18 @@ describe('macro-engine', () => {
     const ctx = makeCtx();
     expect(evaluateMacros('A\n  {{trim}}  \nB', ctx)).toBe('AB');
   });
+
+  it('expands stat_data, display_data, and delta_data message variables', () => {
+    const ctx = makeCtx({
+      statData: {
+        叶婉君: { 怀疑值: 0, 堕落值: 98522, $meta: { hidden: true } },
+      },
+    });
+    const displayJson = JSON.parse(evaluateMacros('{{get_message_variable::display_data}}', ctx));
+    expect(displayJson['叶婉君']['怀疑值']).toBe(0);
+    expect(displayJson['叶婉君']['堕落值']).toBe(98522);
+    expect(displayJson['叶婉君']['$meta']).toBeUndefined();
+    expect(evaluateMacros('{{get_message_variable::display_data.叶婉君.堕落值}}', ctx)).toBe('98522');
+    expect(evaluateMacros('{{get_message_variable::delta_data}}', ctx)).toBe('{}');
+  });
 });

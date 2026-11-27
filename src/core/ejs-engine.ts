@@ -27,12 +27,20 @@ export function renderEjsTemplate(template: string, ctx: EjsTemplateContext): st
     const trimmed = String(key || '').trim();
     if (!trimmed) return opts?.defaults;
 
-    // 1. Direct `stat_data` or `stat_data.a.b`
-    if (trimmed === 'stat_data') {
+    // 1. Direct `stat_data` / `display_data` / `delta_data`
+    if (trimmed === 'stat_data' || trimmed === 'display_data') {
       return ctx.statData;
+    }
+    if (trimmed === 'delta_data') {
+      return {};
     }
     if (trimmed.startsWith('stat_data.')) {
       const subPath = trimmed.slice('stat_data.'.length);
+      const val = getByDotPath(ctx.statData, subPath);
+      return val !== undefined ? val : opts?.defaults;
+    }
+    if (trimmed.startsWith('display_data.')) {
+      const subPath = trimmed.slice('display_data.'.length);
       const val = getByDotPath(ctx.statData, subPath);
       return val !== undefined ? val : opts?.defaults;
     }
@@ -91,6 +99,8 @@ export function renderEjsTemplate(template: string, ctx: EjsTemplateContext): st
         getwi,
         getchar,
         stat_data: ctx.statData,
+        display_data: ctx.statData,
+        delta_data: {},
         user: ctx.userName ?? 'User',
         char: ctx.card?.name ?? '',
         _: lodashShim,

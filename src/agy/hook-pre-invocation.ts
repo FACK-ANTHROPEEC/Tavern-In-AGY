@@ -9,7 +9,7 @@ import {
 } from '../core/prompt-assembler.js';
 import { applyMvuUpdates } from '../core/mvu-engine.js';
 import { StoryLogStore, resolveStoryKey } from '../core/story-log.js';
-import { extractWaveOptions, readRecentTranscriptTexts } from './transcript-reader.js';
+import { extractWaveOptions, readLastUserInputStamp, readRecentTranscriptTexts } from './transcript-reader.js';
 import type { Lorebook } from '../core/types.js';
 import type { HookOutput } from './hook-session-start.js';
 
@@ -110,17 +110,60 @@ export function handlePreInvocation(
   // story-writer subagent per turn. Never inject RP prose/lore into the main window; cache the user input
   // with a 5-min TTL so the spawned story-writer subagent's SessionStart unlocks and injects full context.
   if (config.directorMode) {
-    // Reactive wakeup after story-writer finishes (invocationNum resets to 1 while lastUserInput is unchanged):
-    // if this exact turn was already claimed by the writer (pendingDirectorInput consumed) or committed,
-    // reset state to 'idle' and return {} so the director wraps up instead of dispatching a duplicate writer.
-    const isPostWriterWakeup =
-      session.lastUserInputHash === inputHash &&
-      (shared.directorTurnState === 'committed' ||
-        (shared.directorTurnState === 'dispatched' && !shared.pendingDirectorInput));
-    if (isPostWriterWakeup) {
-      shared.directorTurnState = 'idle';
-      storage.saveSession(shared);
+    const currentUserStepStamp = readLastUserInputStamp(payload.transcriptPath);
+    const hasFreshStagedInput =
+      Boolean(shared.stagedSidePaneInput) &&
+      Date.now() - (shared.stagedSidePaneInputAt ?? 0) <= 300_000;
+
+    // 1. Exact same-turn deduplication via transcript USER_INPUT step stamp:
+    // suppresses ALL follow-up PreInvocation calls within the same user turn
+    // (after invoke_subagent, on subagent wakeup, and after manage_subagents kill)
+    // without ever touching staged/pending writer input.
+    if (currentUserStepStamp && session.lastDispatchedUserStep === currentUserStepStamp) {
+      if (shared.directorTurnState === 'committed') {
+        shared.directorTurnState = 'idle';
+        storage.saveSession(shared);
+      }
       return {};
+    }
+
+    // 2. Exact same-stage deduplication: if this exact side-pane staged input was already dispatched
+    // (e.g. Call 2 after invoke_subagent returns, BEFORE writer SessionStart consumes it), return {} immediately!
+    if (
+      hasFreshStagedInput &&
+      shared.stagedSidePaneInputAt !== undefined &&
+      session.lastDispatchedStagedAt === shared.stagedSidePaneInputAt
+    ) {
+      return {};
+    }
+
+    // 3. Fallback same-turn deduplication when transcriptPath is absent:
+    // - While directorTurnState === 'dispatched' with same inputHash (even if SessionStart has NOT yet
+    //   consumed pendingDirectorInput!), return {} immediately so follow-up tool calls NEVER overwrite
+    //   staged input or inject duplicate router prompts.
+    // - On reactive wakeup after commit or post-commit kill-tool return (within 30s and no fresh stage),
+    //   return {} cleanly.
+    const sameInputAsLast = session.lastUserInputHash === inputHash;
+    if (sameInputAsLast && !hasFreshStagedInput) {
+      if (shared.directorTurnState === 'dispatched') {
+        if (!shared.pendingDirectorInput) {
+          // Writer already claimed pendingDirectorInput and exited without committing -> reset to idle
+          shared.directorTurnState = 'idle';
+          storage.saveSession(shared);
+        }
+        return {};
+      }
+      if (shared.directorTurnState === 'committed') {
+        shared.directorTurnState = 'idle';
+        storage.saveSession(shared);
+        return {};
+      }
+      if (
+        shared.directorCommittedAt &&
+        Date.now() - shared.directorCommittedAt <= 30_000
+      ) {
+        return {};
+      }
     }
 
     // OOC panel-open request inside an active RP window -> open reader directly without dispatching a writer
@@ -141,23 +184,25 @@ export function handlePreInvocation(
       };
     }
 
-    // Prefer real user input staged from the side-pane reader (5-min TTL) so main chat only ever sees a minimal floor trigger
-    const hasFreshStagedInput =
-      Boolean(shared.stagedSidePaneInput) &&
-      Date.now() - (shared.stagedSidePaneInputAt ?? 0) <= 300_000;
-    const effectiveUserInput = hasFreshStagedInput
-      ? shared.stagedSidePaneInput!
-      : lastUserInput;
-    if (shared.stagedSidePaneInput !== undefined) {
-      shared.stagedSidePaneInput = undefined;
-      shared.stagedSidePaneInputAt = undefined;
+    // Direct channel: if side-pane staged the real input, NEVER delete or overwrite it here—
+    // SessionStart is the sole consumer of stagedSidePaneInput/pendingDirectorInput, and
+    // story_commit_turn is the sole consumer of lastUserInputForCommit.
+    if (hasFreshStagedInput) {
+      const staged = shared.stagedSidePaneInput!;
+      shared.pendingDirectorInput = staged;
+      shared.pendingDirectorInputAt = shared.stagedSidePaneInputAt ?? Date.now();
+      shared.lastUserInputForCommit = staged;
+    } else {
+      shared.pendingDirectorInput = lastUserInput;
+      shared.pendingDirectorInputAt = Date.now();
+      shared.lastUserInputForCommit = lastUserInput;
     }
 
     shared.directorTurnState = 'dispatched';
-    shared.pendingDirectorInput = effectiveUserInput;
-    shared.pendingDirectorInputAt = Date.now();
-    shared.lastUserInputForCommit = effectiveUserInput;
+    shared.directorCommittedAt = undefined;
     session.lastUserInputHash = inputHash;
+    session.lastDispatchedUserStep = currentUserStepStamp ?? undefined;
+    session.lastDispatchedStagedAt = hasFreshStagedInput ? shared.stagedSidePaneInputAt : undefined;
     storage.saveSession(shared);
     if (convId !== 'default') {
       storage.saveSession(session);

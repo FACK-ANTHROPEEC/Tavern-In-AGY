@@ -53,30 +53,42 @@ export function handleSessionStart(
     session.statData = { ...(shared.statData ?? {}) };
   }
 
-  // In Director Mode, the main window (tavern-director) opens BEFORE any user message is sent,
-  // so pendingDirectorInput is absent -> return {} (0 bytes) to keep the director's mind 100% clean.
-  // Only the freshly spawned story-writer subagent (within 5 min of PreInvocation) consumes it and receives the full context.
+  // In Director Mode, the main window opens BEFORE any user message is sent,
+  // so pendingDirectorInput/stagedSidePaneInput is absent -> return {} (0 bytes) to keep the director's mind 100% clean.
+  // Only the freshly spawned story-writer subagent (within 5 min) consumes it and receives the full context.
+  const hasFreshStagedInput =
+    Boolean(shared.stagedSidePaneInput) &&
+    Date.now() - (shared.stagedSidePaneInputAt ?? 0) <= 300_000;
   const hasFreshDirectorInput =
-    Boolean(shared.pendingDirectorInput) &&
-    Date.now() - (shared.pendingDirectorInputAt ?? 0) <= 300_000;
+    hasFreshStagedInput ||
+    (Boolean(shared.pendingDirectorInput) &&
+      Date.now() - (shared.pendingDirectorInputAt ?? 0) <= 300_000);
 
   if (config.directorMode) {
     if (!hasFreshDirectorInput) {
-      if (shared.pendingDirectorInput) {
+      if (shared.pendingDirectorInput || shared.stagedSidePaneInput) {
         shared.pendingDirectorInput = undefined;
         shared.pendingDirectorInputAt = undefined;
+        shared.stagedSidePaneInput = undefined;
+        shared.stagedSidePaneInputAt = undefined;
         storage.saveSession(shared);
       }
       return {};
     }
-    pendingDirectorInput = shared.pendingDirectorInput!;
+    pendingDirectorInput = hasFreshStagedInput
+      ? shared.stagedSidePaneInput!
+      : shared.pendingDirectorInput!;
     shared.pendingDirectorInput = undefined;
     shared.pendingDirectorInputAt = undefined;
+    shared.stagedSidePaneInput = undefined;
+    shared.stagedSidePaneInputAt = undefined;
     storage.saveSession(shared);
     session.isWriterSubagent = true;
-  } else if (shared.pendingDirectorInput) {
+  } else if (shared.pendingDirectorInput || shared.stagedSidePaneInput) {
     shared.pendingDirectorInput = undefined;
     shared.pendingDirectorInputAt = undefined;
+    shared.stagedSidePaneInput = undefined;
+    shared.stagedSidePaneInputAt = undefined;
     storage.saveSession(shared);
   }
 

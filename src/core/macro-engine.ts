@@ -207,10 +207,14 @@ function evaluateMacroExpression(expr: string, ctx: MacroContext): string {
     ) {
       const key = rest.trim();
       let val: unknown;
-      if (key === 'stat_data') {
+      if (key === 'stat_data' || key === 'display_data') {
         val = ctx.statData ?? {};
+      } else if (key === 'delta_data') {
+        val = {};
       } else if (key.startsWith('stat_data.')) {
         val = getByDotPath(ctx.statData ?? {}, key.slice('stat_data.'.length));
+      } else if (key.startsWith('display_data.')) {
+        val = getByDotPath(ctx.statData ?? {}, key.slice('display_data.'.length));
       } else if (key in ctx.vars) {
         val = ctx.vars[key];
       } else {

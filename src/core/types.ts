@@ -184,6 +184,12 @@ export interface SessionRuntime {
   isWriterSubagent?: boolean;
   /** Director Mode per-turn handshake state stored on the shared 'default' session to prevent duplicate dispatch on subagent wakeup */
   directorTurnState?: 'idle' | 'dispatched' | 'committed';
+  /** Timestamp when story_commit_turn finished the latest director turn (used to suppress post-commit kill-tool PreInvocation echoes) */
+  directorCommittedAt?: number;
+  /** Unique USER_INPUT step stamp from transcript.jsonl (`step_index|created_at`) for exact per-turn PreInvocation deduplication */
+  lastDispatchedUserStep?: string;
+  /** Timestamp (`stagedSidePaneInputAt`) of the side-pane staged input already dispatched by PreInvocation */
+  lastDispatchedStagedAt?: number;
   /** Per-conversation RP activation flag set by `/rp` and cleared by `/rp off`, keeping normal AGY chats 100% isolated */
   rpModeActive?: boolean;
 }

@@ -447,10 +447,12 @@ server.registerTool(
     session.lastUserInputForCommit = undefined;
     session.latestOptions = normalizedOptions;
     session.directorTurnState = 'committed';
+    session.directorCommittedAt = Date.now();
     storage.saveSession(session);
     if (session.conversationId !== DEFAULT_SESSION_ID) {
       const shared = storage.getSession(DEFAULT_SESSION_ID);
       shared.directorTurnState = 'committed';
+      shared.directorCommittedAt = session.directorCommittedAt;
       shared.lastUserInputForCommit = undefined;
       storage.saveSession(shared);
     }
@@ -1478,9 +1480,17 @@ server.registerTool(
   },
   async ({ text }) => {
     const trimmed = text.trim();
+    const now = Date.now();
     const session = storage.getSession(DEFAULT_SESSION_ID);
     session.stagedSidePaneInput = trimmed || undefined;
-    session.stagedSidePaneInputAt = trimmed ? Date.now() : undefined;
+    session.stagedSidePaneInputAt = trimmed ? now : undefined;
+    if (trimmed) {
+      // Write directly to the writer handoff fields so PreInvocation never needs to relay or overwrite them
+      session.pendingDirectorInput = trimmed;
+      session.pendingDirectorInputAt = now;
+      session.lastUserInputForCommit = trimmed;
+      session.directorCommittedAt = undefined;
+    }
     storage.saveSession(session);
     return {
       content: [{ type: 'text', text: 'staged' }],
