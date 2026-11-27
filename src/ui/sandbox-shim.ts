@@ -298,6 +298,10 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
         name1: USER,
         name2: CHAR,
         characterId: 0,
+        groupId: null,
+        chatId: 'default',
+        onlineStatus: 'connected',
+        getCurrentChatId: function(){ return 'default'; },
         characters: [{ name: CHAR, data: { name: CHAR, extensions: EXT } }],
         chat: CHAT,
         chatMetadata: { variables: getVariables() },
@@ -332,27 +336,72 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
     }
   });
 
+  let lastSentH = -1;
+  function measureContentHeight(){
+    const body = document.body;
+    if (!body) return 0;
+    const cs = window.getComputedStyle(body);
+    const padBottom = parseFloat(cs.paddingBottom) || 0;
+    let maxBottom = 0;
+    for (let i = 0; i < body.children.length; i++){
+      const el = body.children[i];
+      const tag = el.tagName;
+      if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'LINK') continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.height > 0 || rect.width > 0) {
+        const ecs = window.getComputedStyle(el);
+        const mb = parseFloat(ecs.marginBottom) || 0;
+        maxBottom = Math.max(maxBottom, rect.bottom + mb);
+      }
+    }
+    if (maxBottom > 0) return Math.ceil(maxBottom + padBottom);
+    return Math.ceil(body.offsetHeight || 0);
+  }
   function postH(){
     try {
-      const h = Math.max(
-        document.body ? document.body.scrollHeight : 0,
-        document.documentElement ? document.documentElement.scrollHeight : 0
-      );
-      window.parent.postMessage({ widgetId: WID, type: 'tavern:resize', height: h }, '*');
+      const h = measureContentHeight();
+      if (h > 0 && h !== lastSentH) {
+        lastSentH = h;
+        window.parent.postMessage({ widgetId: WID, type: 'tavern:resize', height: h }, '*');
+      }
     } catch(e){}
   }
-  window.addEventListener('load', function(){ postH(); setTimeout(postH, 120); setTimeout(postH, 450); });
-  if (typeof ResizeObserver !== 'undefined') {
-    window.addEventListener('DOMContentLoaded', function(){
-      if (document.body) new ResizeObserver(postH).observe(document.body);
-      postH();
-    });
+  function schedulePostH(){
+    postH();
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(postH);
+    setTimeout(postH, 80);
+    setTimeout(postH, 240);
+    setTimeout(postH, 450);
   }
+  window.addEventListener('load', schedulePostH);
+  document.addEventListener('click', schedulePostH, true);
+  document.addEventListener('transitionend', postH, true);
+  window.addEventListener('DOMContentLoaded', function(){
+    if (document.body) {
+      if (typeof ResizeObserver !== 'undefined') {
+        const ro = new ResizeObserver(postH);
+        ro.observe(document.body);
+        for (let i = 0; i < document.body.children.length; i++){
+          const el = document.body.children[i];
+          if (el.tagName !== 'SCRIPT' && el.tagName !== 'STYLE') ro.observe(el);
+        }
+      }
+      if (typeof MutationObserver !== 'undefined') {
+        new MutationObserver(schedulePostH).observe(document.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['class', 'style', 'open', 'hidden', 'aria-expanded'],
+        });
+      }
+    }
+    schedulePostH();
+  });
 })();
 </script>`;
 
   const baseStyle = `<style>
-html,body{margin:0;padding:4px;background:transparent;color:#e5d9c3;font-family:"Noto Serif SC","Source Han Serif SC",system-ui,sans-serif;box-sizing:border-box;}
+html,body{margin:0;padding:4px;height:auto!important;min-height:0!important;background:transparent;color:#e5d9c3;font-family:"Noto Serif SC","Source Han Serif SC",system-ui,sans-serif;box-sizing:border-box;}
 *,*::before,*::after{box-sizing:inherit;}
 </style>`;
 

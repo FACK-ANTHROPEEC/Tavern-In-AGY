@@ -137,7 +137,7 @@ function InlineRegexWidget({
         ref={iframeRef}
         title={title || 'Preset / Card Widget'}
         className="inline-widget-frame"
-        sandbox="allow-scripts"
+        sandbox="allow-scripts allow-same-origin"
         srcDoc={srcDoc}
         style={{ height }}
       />

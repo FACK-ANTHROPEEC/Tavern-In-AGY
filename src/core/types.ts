@@ -92,6 +92,7 @@ export interface Preset {
   name: string;
   prompts: PresetPromptItem[];
   regexScripts: RegexScript[];
+  tavernHelperScripts?: TavernHelperScript[];
   samplingMeta: Record<string, unknown>;
   importedAt: string;
 }

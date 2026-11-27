@@ -18,6 +18,44 @@ function extractOriginsFromText(text: string, out: Set<string>): void {
   }
 }
 
+export function extractTavernHelperScripts(
+  rawHelper: unknown,
+  origins?: Set<string>,
+): TavernHelperScript[] {
+  let rawList: unknown[] = [];
+  if (Array.isArray(rawHelper)) {
+    // Support tuple-map format: [["scripts", [...]], ["variables", {...}]]
+    const scriptsTuple = rawHelper.find(
+      (entry) => Array.isArray(entry) && entry[0] === 'scripts' && Array.isArray(entry[1]),
+    ) as [string, unknown[]] | undefined;
+    if (scriptsTuple) {
+      rawList = scriptsTuple[1];
+    }
+  } else if (rawHelper && typeof rawHelper === 'object') {
+    const obj = rawHelper as Record<string, unknown>;
+    if (Array.isArray(obj.scripts)) {
+      rawList = obj.scripts;
+    }
+  }
+
+  const out: TavernHelperScript[] = [];
+  for (const item of rawList) {
+    if (!item || typeof item !== 'object') continue;
+    const rec = item as Record<string, unknown>;
+    const payload =
+      rec.value && typeof rec.value === 'object' ? (rec.value as Record<string, unknown>) : rec;
+    const content = String(payload.content ?? '');
+    if (!content && !payload.name) continue;
+    if (origins) extractOriginsFromText(content, origins);
+    out.push({
+      name: String(payload.name ?? 'Unnamed Script'),
+      content,
+      enabled: payload.enabled !== false,
+    });
+  }
+  return out;
+}
+
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 function slugifyId(name: string): string {
@@ -130,19 +168,10 @@ export function parseCharacterCardJson(
     }
   }
 
-  const tavernHelperScripts: TavernHelperScript[] = [];
-  const th = ext.tavern_helper as Record<string, unknown> | undefined;
-  if (th && Array.isArray(th.scripts)) {
-    for (const s of th.scripts as Array<Record<string, unknown>>) {
-      const content = String(s.content ?? '');
-      extractOriginsFromText(content, origins);
-      tavernHelperScripts.push({
-        name: String(s.name ?? 'Unnamed Script'),
-        content,
-        enabled: s.enabled !== false,
-      });
-    }
-  }
+  const tavernHelperScripts = extractTavernHelperScripts(
+    ext.tavern_helper ?? ext.TavernHelper,
+    origins,
+  );
 
   // Preserve arbitrary non-standard extension payloads (e.g. dch_portraits, dch_maps) generically
   const customExtensions: Record<string, unknown> = {};

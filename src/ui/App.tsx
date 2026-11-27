@@ -4,6 +4,7 @@ import type { RegexScript } from '../core/types';
 import { MvuTreeView } from './MvuTreeView';
 import { TavernFrontendHost, type CardFrontendPayload } from './TavernFrontendHost';
 import { FloorRenderer } from './FloorRenderer';
+import { unpackCharacterCardPng } from './png-unpack';
 
 interface EmbeddedLoreEntrySummary {
   uid: string;
@@ -12,6 +13,13 @@ interface EmbeddedLoreEntrySummary {
   constant: boolean;
   enabled: boolean;
   order: number;
+}
+
+interface HelperScriptSummary {
+  index: number;
+  name: string;
+  enabled: boolean;
+  charLength: number;
 }
 
 interface CardSummary {
@@ -29,6 +37,8 @@ interface CardSummary {
   embeddedLorebookEntries?: EmbeddedLoreEntrySummary[];
   hasFrontendHtml?: boolean;
   hasHelperScripts?: boolean;
+  regexScripts?: PresetRegexSummary[];
+  helperScripts?: HelperScriptSummary[];
 }
 
 interface PresetPromptSummary {
@@ -59,6 +69,7 @@ interface PresetSummary {
   samplingMeta: Record<string, unknown>;
   prompts: PresetPromptSummary[];
   regexScripts?: PresetRegexSummary[];
+  helperScripts?: HelperScriptSummary[];
 }
 
 interface LorebookSummary {
@@ -148,19 +159,11 @@ interface BootstrapData {
 
 type TabKey = 'chat' | 'cards' | 'presets' | 'lorebooks' | 'state';
 
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
-
 export function AppView() {
   const appRef = useRef<App | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const composerTextRef = useRef<string>('');
   const [data, setData] = useState<BootstrapData | null>(null);
   const [tab, setTab] = useState<TabKey>('chat');
   const [statusMsg, setStatusMsg] = useState<string>('正在连接 TavernInAGY 本地引擎...');
@@ -174,6 +177,9 @@ export function AppView() {
   const pendingBaseLastTurnIdRef = useRef<string | null>(null);
   const [cardFrontend, setCardFrontend] = useState<CardFrontendPayload | null>(null);
   const [showPresetRegexList, setShowPresetRegexList] = useState<boolean>(false);
+  const [showPresetHelperList, setShowPresetHelperList] = useState<boolean>(false);
+  const [showCardRegexList, setShowCardRegexList] = useState<boolean>(false);
+  const [showCardHelperList, setShowCardHelperList] = useState<boolean>(false);
   const [showEmbeddedLore, setShowEmbeddedLore] = useState<boolean>(true);
   const [editingPromptId, setEditingPromptId] = useState<string | null>(null);
   const [editingPromptContent, setEditingPromptContent] = useState<string>('');
@@ -273,6 +279,22 @@ export function AppView() {
     setUserPersonaDraft(data.config.userPersona ?? '');
   }, [data?.config.authorsNote, data?.config.userName, data?.config.userPersona]);
 
+  // Keep composerTextRef synced and bridge native `input` events dispatched by preset option widgets
+  useEffect(() => {
+    composerTextRef.current = composerText;
+  }, [composerText]);
+
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    const onNativeInput = () => {
+      composerTextRef.current = el.value;
+      setComposerText(el.value);
+    };
+    el.addEventListener('input', onNativeInput);
+    return () => el.removeEventListener('input', onNativeInput);
+  }, [tab, Boolean(data)]);
+
   // Auto-scroll to bottom when new turns arrive or user sends a message
   useEffect(() => {
     if (tab === 'chat') {
@@ -329,6 +351,15 @@ export function AppView() {
     }
     try {
       const res = await app.callServerTool({ name, arguments: args });
+      if (res?.isError) {
+        const errText =
+          (res.content ?? [])
+            .map((c) => ('text' in c && typeof c.text === 'string' ? c.text : ''))
+            .filter(Boolean)
+            .join(' ') || '未知工具错误';
+        setStatusMsg(`操作失败: ${errText}`);
+        return undefined;
+      }
       const sc = res?.structuredContent as BootstrapData | undefined;
       if (sc && sc.config) {
         setData(sc);
@@ -341,6 +372,43 @@ export function AppView() {
       setStatusMsg(`操作失败: ${String(err)}`);
       return undefined;
     }
+  }
+
+  async function stageUploadText(
+    text: string,
+    label: string,
+  ): Promise<{ jsonText?: string; uploadId?: string } | null> {
+    const CHUNK_SIZE = 384 * 1024;
+    if (text.length <= CHUNK_SIZE) {
+      return { jsonText: text };
+    }
+    const app = appRef.current;
+    if (!app) return null;
+    const uploadId = `up-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const totalChunks = Math.ceil(text.length / CHUNK_SIZE);
+    for (let i = 0; i < totalChunks; i += 1) {
+      setStatusMsg(`正在分片上传${label} (${i + 1}/${totalChunks})...`);
+      const slice = text.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+      try {
+        const res = await app.callServerTool({
+          name: 'story_app_upload_chunk',
+          arguments: { uploadId, chunkIndex: i, totalChunks, data: slice },
+        });
+        if (res?.isError) {
+          const errText =
+            (res.content ?? [])
+              .map((c) => ('text' in c && typeof c.text === 'string' ? c.text : ''))
+              .filter(Boolean)
+              .join(' ') || '分片上传失败';
+          setStatusMsg(`上传失败: ${errText}`);
+          return null;
+        }
+      } catch (err) {
+        setStatusMsg(`分片上传失败 (${i + 1}/${totalChunks}): ${String(err)}`);
+        return null;
+      }
+    }
+    return { uploadId };
   }
 
   async function sendTextToChat(rawText: string) {
@@ -385,45 +453,85 @@ export function AppView() {
   async function handleCardUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    setStatusMsg(`正在导入角色卡 ${file.name}...`);
-    const buf = await file.arrayBuffer();
-    const isPng = file.name.toLowerCase().endsWith('.png');
-    await callTool('story_app_import_card', {
-      filename: file.name,
-      contentBase64: arrayBufferToBase64(buf),
-      isPng,
-      setActive: true,
-    });
-    setStatusMsg(`已导入并启用角色卡: ${file.name}`);
-    e.target.value = '';
+    setStatusMsg(`正在解析角色卡 ${file.name}...`);
+    try {
+      const isPng = file.name.toLowerCase().endsWith('.png');
+      let jsonText: string;
+      let avatarDataUrl: string | undefined;
+      if (isPng) {
+        const unpacked = await unpackCharacterCardPng(file);
+        jsonText = unpacked.jsonText;
+        avatarDataUrl = unpacked.avatarDataUrl;
+      } else {
+        jsonText = await file.text();
+        JSON.parse(jsonText);
+      }
+      const staged = await stageUploadText(jsonText, `角色卡 ${file.name}`);
+      if (!staged) return;
+      setStatusMsg(`正在保存角色卡 ${file.name}...`);
+      const ok = await callTool('story_app_import_card', {
+        filename: file.name,
+        ...staged,
+        avatarDataUrl,
+        isPng: false,
+        setActive: true,
+      });
+      if (ok) {
+        setStatusMsg(`已导入并启用角色卡: ${file.name}`);
+      }
+    } catch (err) {
+      setStatusMsg(`导入角色卡失败: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      e.target.value = '';
+    }
   }
 
   async function handlePresetUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setStatusMsg(`正在解析社区预设 ${file.name}...`);
-    const jsonText = await file.text();
-    await callTool('story_app_import_preset', {
-      filename: file.name,
-      jsonText,
-      setActive: true,
-    });
-    setStatusMsg(`已导入并启用预设: ${file.name}`);
-    e.target.value = '';
+    try {
+      const jsonText = await file.text();
+      JSON.parse(jsonText);
+      const staged = await stageUploadText(jsonText, `预设 ${file.name}`);
+      if (!staged) return;
+      const ok = await callTool('story_app_import_preset', {
+        filename: file.name,
+        ...staged,
+        setActive: true,
+      });
+      if (ok) {
+        setStatusMsg(`已导入并启用预设: ${file.name}`);
+      }
+    } catch (err) {
+      setStatusMsg(`导入预设失败: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      e.target.value = '';
+    }
   }
 
   async function handleLorebookUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setStatusMsg(`正在导入世界书 ${file.name}...`);
-    const jsonText = await file.text();
-    await callTool('story_app_import_lorebook', {
-      filename: file.name,
-      jsonText,
-      activate: true,
-    });
-    setStatusMsg(`已导入世界书: ${file.name}`);
-    e.target.value = '';
+    try {
+      const jsonText = await file.text();
+      JSON.parse(jsonText);
+      const staged = await stageUploadText(jsonText, `世界书 ${file.name}`);
+      if (!staged) return;
+      const ok = await callTool('story_app_import_lorebook', {
+        filename: file.name,
+        ...staged,
+        activate: true,
+      });
+      if (ok) {
+        setStatusMsg(`已导入世界书: ${file.name}`);
+      }
+    } catch (err) {
+      setStatusMsg(`导入世界书失败: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      e.target.value = '';
+    }
   }
 
   async function handleForkBranch() {
@@ -758,6 +866,8 @@ export function AppView() {
           <div className="composer-dock">
             <div className="composer-row">
               <textarea
+                id="send_textarea"
+                ref={composerRef}
                 className="composer-input"
                 placeholder={
                   canMessage
@@ -770,18 +880,23 @@ export function AppView() {
                 }
                 value={composerText}
                 disabled={!canMessage}
-                onChange={(e) => setComposerText(e.target.value)}
+                onChange={(e) => {
+                  composerTextRef.current = e.target.value;
+                  setComposerText(e.target.value);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    sendTextToChat(composerText);
+                    sendTextToChat(composerTextRef.current);
                   }
                 }}
               />
               <button
+                id="send_but"
                 className="btn btn-primary composer-send"
-                disabled={!canMessage || !composerText.trim()}
-                onClick={() => sendTextToChat(composerText)}
+                disabled={!canMessage}
+                style={{ opacity: composerText.trim() ? 1 : 0.65 }}
+                onClick={() => sendTextToChat(composerRef.current?.value ?? composerTextRef.current)}
               >
                 发送
               </button>
@@ -949,6 +1064,119 @@ export function AppView() {
                   </div>
                 );
               })}
+
+              {activeCard && activeCard.regexScripts && activeCard.regexScripts.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div
+                    className="section-header"
+                    onClick={() => setShowCardRegexList((v) => !v)}
+                  >
+                    <span>
+                      {showCardRegexList ? '▾' : '▸'} 角色卡正则脚本（{activeCard.name}）
+                    </span>
+                    <span className="muted">
+                      {activeCard.regexScripts.filter((r) => !r.disabled).length}/{activeCard.regexScripts.length}
+                    </span>
+                  </div>
+                  {showCardRegexList && (
+                    <div className="st-prompt-list">
+                      {activeCard.regexScripts.map((r) => {
+                        const modeTag =
+                          r.markdownOnly && !r.promptOnly
+                            ? '仅显示'
+                            : r.promptOnly && !r.markdownOnly
+                              ? '仅注入'
+                              : '双向';
+                        const depthTag =
+                          r.minDepth !== null || r.maxDepth !== null
+                            ? `深度 ${r.minDepth ?? 0}~${r.maxDepth ?? '∞'}`
+                            : '';
+                        return (
+                          <div
+                            key={r.index}
+                            className={`st-prompt-row ${r.disabled ? 'disabled' : ''}`}
+                          >
+                            <div className="st-prompt-left">
+                              <span className="st-star">⌘</span>
+                              <span className="st-prompt-name" title={r.scriptName}>
+                                {r.scriptName}
+                              </span>
+                              <span className="badge">{modeTag}</span>
+                              {depthTag && <span className="badge">{depthTag}</span>}
+                            </div>
+                            <div className="st-prompt-right">
+                              <label className="st-switch">
+                                <input
+                                  type="checkbox"
+                                  checked={!r.disabled}
+                                  onChange={(e) =>
+                                    callTool('story_app_toggle_card_regex', {
+                                      cardId: activeCard.id,
+                                      index: r.index,
+                                      disabled: !e.target.checked,
+                                    })
+                                  }
+                                />
+                                <span className="st-slider" />
+                              </label>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeCard && activeCard.helperScripts && activeCard.helperScripts.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div
+                    className="section-header"
+                    onClick={() => setShowCardHelperList((v) => !v)}
+                  >
+                    <span>
+                      {showCardHelperList ? '▾' : '▸'} 角色卡助手脚本（{activeCard.name}）
+                    </span>
+                    <span className="muted">
+                      {activeCard.helperScripts.filter((s) => s.enabled).length}/{activeCard.helperScripts.length}
+                    </span>
+                  </div>
+                  {showCardHelperList && (
+                    <div className="st-prompt-list">
+                      {activeCard.helperScripts.map((s) => (
+                        <div
+                          key={s.index}
+                          className={`st-prompt-row ${s.enabled ? '' : 'disabled'}`}
+                        >
+                          <div className="st-prompt-left">
+                            <span className="st-star">⚙</span>
+                            <span className="st-prompt-name" title={s.name}>
+                              {s.name}
+                            </span>
+                            <span className="badge">{Math.max(1, Math.round(s.charLength / 1024))} KB</span>
+                          </div>
+                          <div className="st-prompt-right">
+                            <label className="st-switch">
+                              <input
+                                type="checkbox"
+                                checked={s.enabled}
+                                onChange={(e) =>
+                                  callTool('story_app_toggle_card_helper_script', {
+                                    cardId: activeCard.id,
+                                    index: s.index,
+                                    enabled: e.target.checked,
+                                  })
+                                }
+                              />
+                              <span className="st-slider" />
+                            </label>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1052,6 +1280,56 @@ export function AppView() {
                               </div>
                             );
                           })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {activePreset.helperScripts && activePreset.helperScripts.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div
+                        className="section-header"
+                        onClick={() => setShowPresetHelperList((v) => !v)}
+                      >
+                        <span>
+                          {showPresetHelperList ? '▾' : '▸'} 预设助手脚本（Helper Scripts）
+                        </span>
+                        <span className="muted">
+                          {activePreset.helperScripts.filter((s) => s.enabled).length}/{activePreset.helperScripts.length}
+                        </span>
+                      </div>
+                      {showPresetHelperList && (
+                        <div className="st-prompt-list">
+                          {activePreset.helperScripts.map((s) => (
+                            <div
+                              key={s.index}
+                              className={`st-prompt-row ${s.enabled ? '' : 'disabled'}`}
+                            >
+                              <div className="st-prompt-left">
+                                <span className="st-star">⚙</span>
+                                <span className="st-prompt-name" title={s.name}>
+                                  {s.name}
+                                </span>
+                                <span className="badge">{Math.max(1, Math.round(s.charLength / 1024))} KB</span>
+                              </div>
+                              <div className="st-prompt-right">
+                                <label className="st-switch">
+                                  <input
+                                    type="checkbox"
+                                    checked={s.enabled}
+                                    onChange={(e) =>
+                                      callTool('story_app_toggle_preset_helper_script', {
+                                        presetId: activePreset.id,
+                                        index: s.index,
+                                        enabled: e.target.checked,
+                                      })
+                                    }
+                                  />
+                                  <span className="st-slider" />
+                                </label>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>
@@ -1332,7 +1610,10 @@ export function AppView() {
 
           {tab === 'state' && (
             <>
-              {activeCard && (activeCard.hasFrontendHtml || activeCard.hasHelperScripts) && (
+              {activeCard &&
+                (activeCard.hasFrontendHtml ||
+                  activeCard.hasHelperScripts ||
+                  Boolean(activePreset?.helperScripts?.some((s) => s.enabled))) && (
                 cardFrontend && cardFrontend.cardId === activeCard.id ? (
                   <TavernFrontendHost
                     frontend={cardFrontend}
@@ -1393,6 +1674,26 @@ export function AppView() {
                 {data.sessionState.summary && (
                   <div className="muted">摘要：{data.sessionState.summary}</div>
                 )}
+              </div>
+
+              <div className="card-box">
+                <strong>玩家设定（User Persona）</strong>
+                <input
+                  className="input"
+                  placeholder="玩家称呼 ({{user}})"
+                  value={userNameDraft}
+                  onChange={(e) => setUserNameDraft(e.target.value)}
+                  onBlur={() => callTool('story_app_update_config', { userName: userNameDraft })}
+                />
+                <textarea
+                  className="textarea"
+                  placeholder="玩家人设描述 ({{persona}})"
+                  value={userPersonaDraft}
+                  onChange={(e) => setUserPersonaDraft(e.target.value)}
+                  onBlur={() =>
+                    callTool('story_app_update_config', { userPersona: userPersonaDraft })
+                  }
+                />
               </div>
 
               <div className="card-box">
@@ -1686,26 +1987,6 @@ export function AppView() {
                     }
                   />
                 </div>
-              </div>
-
-              <div className="card-box">
-                <strong>玩家设定（User Persona）</strong>
-                <input
-                  className="input"
-                  placeholder="玩家称呼 ({{user}})"
-                  value={userNameDraft}
-                  onChange={(e) => setUserNameDraft(e.target.value)}
-                  onBlur={() => callTool('story_app_update_config', { userName: userNameDraft })}
-                />
-                <textarea
-                  className="textarea"
-                  placeholder="玩家人设描述 ({{persona}})"
-                  value={userPersonaDraft}
-                  onChange={(e) => setUserPersonaDraft(e.target.value)}
-                  onBlur={() =>
-                    callTool('story_app_update_config', { userPersona: userPersonaDraft })
-                  }
-                />
               </div>
             </>
           )}

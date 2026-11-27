@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { Preset, PresetPromptItem, RegexScript } from './types.js';
 import { evaluateMacros, type MacroContext } from './macro-engine.js';
+import { extractTavernHelperScripts } from './card-parser.js';
 
 const SAMPLING_KEYS = [
   'temperature',
@@ -159,6 +160,10 @@ export function parsePresetJson(
     }
   }
 
+  const tavernHelperScripts = extractTavernHelperScripts(
+    ext?.tavern_helper ?? ext?.TavernHelper,
+  );
+
   const samplingMeta: Record<string, unknown> = {};
   for (const key of SAMPLING_KEYS) {
     if (key in obj) samplingMeta[key] = obj[key];
@@ -171,6 +176,7 @@ export function parsePresetJson(
     name,
     prompts: ordered,
     regexScripts,
+    tavernHelperScripts: tavernHelperScripts.length > 0 ? tavernHelperScripts : undefined,
     samplingMeta,
     importedAt: new Date().toISOString(),
   };

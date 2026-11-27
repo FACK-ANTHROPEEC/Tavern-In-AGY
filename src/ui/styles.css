@@ -99,11 +99,6 @@ body {
   margin-right: auto;
 }
 
-.story-prose {
-  font-size: var(--prose-font-size);
-  line-height: var(--prose-line-height);
-}
-
 .user-bubble {
   padding: 8px 12px;
   background: rgba(184, 163, 131, 0.08);
@@ -488,8 +483,8 @@ body {
 
 .story-prose {
   font-family: var(--font-serif);
-  font-size: 14px;
-  line-height: 1.9;
+  font-size: var(--prose-font-size);
+  line-height: var(--prose-line-height);
   color: var(--ink-text-bright);
   letter-spacing: 0.03em;
 }
@@ -507,8 +502,8 @@ body {
   padding: 2px 0 2px 12px;
   border-left: 2px solid var(--ink-quote-bar);
   color: var(--ink-quote-text);
-  font-size: 13.5px;
-  line-height: 1.85;
+  font-size: calc(var(--prose-font-size) * 0.96);
+  line-height: var(--prose-line-height);
 }
 
 .floor-segments {
@@ -519,8 +514,8 @@ body {
 
 .story-html-block {
   font-family: var(--font-serif);
-  font-size: 13px;
-  line-height: 1.75;
+  font-size: var(--prose-font-size);
+  line-height: var(--prose-line-height);
   color: var(--ink-text);
 }
 

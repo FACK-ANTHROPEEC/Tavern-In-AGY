@@ -119,34 +119,67 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
         ...(activeCardObj?.regexScripts ?? []),
       ].filter((r) => !r.disabled && (r.markdownOnly || !r.promptOnly));
 
+  let remainingAvatarBudget = 1_200_000;
   return {
     config,
-    cards: cards.map((c) => ({
-      id: c.id,
-      name: c.name,
-      description: c.description,
-      personality: c.personality,
-      scenario: c.scenario,
-      firstMessage: c.firstMessage,
-      tags: c.tags,
-      avatarDataUrl: opts?.omitAvatars ? undefined : c.avatarDataUrl,
-      hasEmbeddedLorebook: Boolean(c.embeddedLorebook),
-      embeddedLorebookName: c.embeddedLorebook?.name,
-      embeddedLorebookCount: c.embeddedLorebook?.entries.length ?? 0,
-      embeddedLorebookEntries: (c.embeddedLorebook?.entries ?? []).map((e) => ({
-        uid: e.uid,
-        comment: e.comment,
-        keys: e.keys,
-        constant: e.constant,
-        enabled: e.enabled,
-        order: e.order,
-      })),
-      hasFrontendHtml: Boolean(
-        c.regexScripts?.some((r) => !r.disabled && isHtmlBeautifyRegex(r.replaceString)),
-      ),
-      hasHelperScripts: Boolean(c.tavernHelperScripts?.some((s) => s.enabled)),
-      importedAt: c.importedAt,
-    })),
+    cards: cards.map((c) => {
+      const isActiveCard = c.id === config.activeCardId;
+      let avatarDataUrl: string | undefined;
+      if (!opts?.omitAvatars && c.avatarDataUrl) {
+        if (c.avatarDataUrl.length <= 64_000 || isActiveCard || c.avatarDataUrl.length <= remainingAvatarBudget) {
+          avatarDataUrl = c.avatarDataUrl;
+          remainingAvatarBudget = Math.max(0, remainingAvatarBudget - c.avatarDataUrl.length);
+        }
+      }
+      return {
+        id: c.id,
+        name: c.name,
+        description: '',
+        personality: '',
+        scenario: c.scenario.slice(0, 120),
+        firstMessage: isActiveCard ? c.firstMessage : '',
+        tags: c.tags,
+        avatarDataUrl,
+        hasEmbeddedLorebook: Boolean(c.embeddedLorebook),
+        embeddedLorebookName: c.embeddedLorebook?.name,
+        embeddedLorebookCount: c.embeddedLorebook?.entries.length ?? 0,
+        embeddedLorebookEntries: isActiveCard
+          ? (c.embeddedLorebook?.entries ?? []).map((e) => ({
+              uid: e.uid,
+              comment: e.comment,
+              keys: e.keys,
+              constant: e.constant,
+              enabled: e.enabled,
+              order: e.order,
+            }))
+          : undefined,
+        hasFrontendHtml: Boolean(
+          c.regexScripts?.some((r) => !r.disabled && isHtmlBeautifyRegex(r.replaceString)),
+        ),
+        hasHelperScripts: Boolean(c.tavernHelperScripts?.some((s) => s.enabled)),
+        regexScripts: isActiveCard
+          ? (c.regexScripts ?? []).map((r, idx) => ({
+              index: idx,
+              scriptName: r.scriptName,
+              disabled: r.disabled,
+              placement: r.placement,
+              markdownOnly: Boolean(r.markdownOnly),
+              promptOnly: Boolean(r.promptOnly),
+              minDepth: r.minDepth ?? null,
+              maxDepth: r.maxDepth ?? null,
+            }))
+          : undefined,
+        helperScripts: isActiveCard
+          ? (c.tavernHelperScripts ?? []).map((s, idx) => ({
+              index: idx,
+              name: s.name,
+              enabled: s.enabled,
+              charLength: s.content.length,
+            }))
+          : undefined,
+        importedAt: c.importedAt,
+      };
+    }),
     presets: presets.map((p) => ({
       id: p.id,
       name: p.name,
@@ -177,6 +210,12 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
         promptOnly: Boolean(r.promptOnly),
         minDepth: r.minDepth ?? null,
         maxDepth: r.maxDepth ?? null,
+      })),
+      helperScripts: (p.tavernHelperScripts ?? []).map((s, idx) => ({
+        index: idx,
+        name: s.name,
+        enabled: s.enabled,
+        charLength: s.content.length,
       })),
       importedAt: p.importedAt,
     })),
@@ -597,7 +636,11 @@ server.registerTool(
           .replace(/\s*```\s*$/i, ''),
       }));
 
-    const helperScripts = (card.tavernHelperScripts ?? []).filter((s) => s.enabled);
+    const activePreset = config.activePresetId ? storage.getPreset(config.activePresetId) : null;
+    const helperScripts = [
+      ...(activePreset?.tavernHelperScripts ?? []).filter((s) => s.enabled),
+      ...(card.tavernHelperScripts ?? []).filter((s) => s.enabled),
+    ];
 
     return {
       content: [{ type: 'text', text: 'ok' }],
@@ -612,32 +655,99 @@ server.registerTool(
   },
 );
 
+const pendingUploads = new Map<string, { chunks: Array<string | undefined>; total: number; createdAt: number }>();
+
+function cleanupExpiredUploads(): void {
+  const cutoff = Date.now() - 5 * 60_000;
+  for (const [id, rec] of pendingUploads.entries()) {
+    if (rec.createdAt < cutoff) pendingUploads.delete(id);
+  }
+}
+
+function consumeUploadPayload(uploadId: string): string {
+  const rec = pendingUploads.get(uploadId);
+  if (!rec) {
+    throw new Error(`Upload session not found or expired: ${uploadId}`);
+  }
+  for (let i = 0; i < rec.total; i += 1) {
+    if (typeof rec.chunks[i] !== 'string') {
+      throw new Error(`Upload incomplete: missing chunk ${i + 1}/${rec.total}`);
+    }
+  }
+  pendingUploads.delete(uploadId);
+  return rec.chunks.join('');
+}
+
+server.registerTool(
+  'story_app_upload_chunk',
+  {
+    title: 'Upload Asset Chunk',
+    description: 'Upload a single chunk of a large card, preset, or lorebook payload.',
+    inputSchema: {
+      uploadId: z.string(),
+      chunkIndex: z.number().int().min(0),
+      totalChunks: z.number().int().min(1).max(200),
+      data: z.string(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ uploadId, chunkIndex, totalChunks, data }) => {
+    cleanupExpiredUploads();
+    let rec = pendingUploads.get(uploadId);
+    if (!rec || rec.total !== totalChunks) {
+      rec = { chunks: new Array(totalChunks), total: totalChunks, createdAt: Date.now() };
+      pendingUploads.set(uploadId, rec);
+    }
+    if (chunkIndex >= totalChunks) {
+      throw new Error(`Invalid chunk index ${chunkIndex} for total ${totalChunks}`);
+    }
+    rec.chunks[chunkIndex] = data;
+    rec.createdAt = Date.now();
+    const received = rec.chunks.filter((c) => typeof c === 'string').length;
+    return {
+      content: [{ type: 'text', text: `chunk ${chunkIndex + 1}/${totalChunks}` }],
+      structuredContent: { uploadId, received, totalChunks },
+    };
+  },
+);
+
 server.registerTool(
   'story_app_import_card',
   {
     title: 'Import Character Card',
-    description: 'Import a Character Card PNG or JSON character card.',
+    description: 'Import a Character Card PNG or JSON character card (supports direct JSON, base64, or chunked uploadId).',
     inputSchema: {
       filename: z.string(),
-      contentBase64: z.string(),
-      isPng: z.boolean(),
+      contentBase64: z.string().optional(),
+      jsonText: z.string().optional(),
+      uploadId: z.string().optional(),
+      avatarDataUrl: z.string().optional(),
+      isPng: z.boolean().optional(),
       setActive: z.boolean().optional(),
     },
     _meta: APP_ONLY_META,
   },
-  async ({ filename, contentBase64, isPng, setActive }) => {
-    const buf = Buffer.from(contentBase64, 'base64');
+  async ({ filename, contentBase64, jsonText, uploadId, avatarDataUrl, isPng, setActive }) => {
     const fallbackName = filename.replace(/\.(png|json)$/i, '');
-    const card = isPng
-      ? parseCharacterCardPng(buf, fallbackName)
-      : parseCharacterCardJson(JSON.parse(buf.toString('utf8')), { fallbackName });
+    let card: CharacterCard;
+    if (uploadId || jsonText !== undefined) {
+      const resolvedJson = uploadId ? consumeUploadPayload(uploadId) : jsonText!;
+      card = parseCharacterCardJson(JSON.parse(resolvedJson), {
+        fallbackName,
+        avatarDataUrl,
+      });
+    } else if (contentBase64) {
+      const buf = Buffer.from(contentBase64, 'base64');
+      card = isPng
+        ? parseCharacterCardPng(buf, fallbackName)
+        : parseCharacterCardJson(JSON.parse(buf.toString('utf8')), { fallbackName, avatarDataUrl });
+    } else {
+      throw new Error('Missing card payload (expected jsonText, uploadId, or contentBase64)');
+    }
     storage.saveCard(card);
     if (setActive !== false) {
       const cfg = storage.saveConfig({ activeCardId: card.id });
-      const initVar = initCardMvuIfEmpty(card, cfg.userName || 'User');
-      const session = storage.getSession(DEFAULT_SESSION_ID);
-      session.statData = initVar;
-      storage.saveSession(session);
+      syncSessionToStoryKey(cfg, getActiveStoryKey(cfg));
     }
     return {
       content: [{ type: 'text', text: `Imported card ${card.name}` }],
@@ -653,13 +763,16 @@ server.registerTool(
     description: 'Import a Character Card Chat Completion Preset JSON.',
     inputSchema: {
       filename: z.string(),
-      jsonText: z.string(),
+      jsonText: z.string().optional(),
+      uploadId: z.string().optional(),
       setActive: z.boolean().optional(),
     },
     _meta: APP_ONLY_META,
   },
-  async ({ filename, jsonText, setActive }) => {
-    const raw = JSON.parse(jsonText);
+  async ({ filename, jsonText, uploadId, setActive }) => {
+    const resolvedJson = uploadId ? consumeUploadPayload(uploadId) : jsonText;
+    if (!resolvedJson) throw new Error('Missing preset payload');
+    const raw = JSON.parse(resolvedJson);
     const name = filename.replace(/\.json$/i, '');
     const preset = parsePresetJson(raw, { name });
     storage.savePreset(preset);
@@ -680,13 +793,16 @@ server.registerTool(
     description: 'Import a Character Card World Info JSON.',
     inputSchema: {
       filename: z.string(),
-      jsonText: z.string(),
+      jsonText: z.string().optional(),
+      uploadId: z.string().optional(),
       activate: z.boolean().optional(),
     },
     _meta: APP_ONLY_META,
   },
-  async ({ filename, jsonText, activate }) => {
-    const raw = JSON.parse(jsonText);
+  async ({ filename, jsonText, uploadId, activate }) => {
+    const resolvedJson = uploadId ? consumeUploadPayload(uploadId) : jsonText;
+    if (!resolvedJson) throw new Error('Missing lorebook payload');
+    const raw = JSON.parse(resolvedJson);
     const name = filename.replace(/\.json$/i, '');
     const book = parseLorebookJson(raw, name);
     storage.saveLorebook(book);
@@ -805,6 +921,87 @@ server.registerTool(
     }
     return {
       content: [{ type: 'text', text: 'regex toggled' }],
+      structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'story_app_toggle_preset_helper_script',
+  {
+    title: 'Toggle Preset Helper Script',
+    description: 'Enable or disable a helper script inside a preset.',
+    inputSchema: {
+      presetId: z.string(),
+      index: z.number(),
+      enabled: z.boolean(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ presetId, index, enabled }) => {
+    const preset = storage.getPreset(presetId);
+    if (!preset) throw new Error(`Preset not found: ${presetId}`);
+    const target = preset.tavernHelperScripts?.[index];
+    if (target) {
+      target.enabled = enabled;
+      storage.savePreset(preset);
+    }
+    return {
+      content: [{ type: 'text', text: 'preset helper script toggled' }],
+      structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'story_app_toggle_card_regex',
+  {
+    title: 'Toggle Character Card Regex Script',
+    description: 'Enable or disable a regex script inside a character card.',
+    inputSchema: {
+      cardId: z.string(),
+      index: z.number(),
+      disabled: z.boolean(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ cardId, index, disabled }) => {
+    const card = storage.getCard(cardId);
+    if (!card) throw new Error(`Card not found: ${cardId}`);
+    const target = card.regexScripts?.[index];
+    if (target) {
+      target.disabled = disabled;
+      storage.saveCard(card);
+    }
+    return {
+      content: [{ type: 'text', text: 'card regex toggled' }],
+      structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'story_app_toggle_card_helper_script',
+  {
+    title: 'Toggle Character Card Helper Script',
+    description: 'Enable or disable a helper script inside a character card.',
+    inputSchema: {
+      cardId: z.string(),
+      index: z.number(),
+      enabled: z.boolean(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ cardId, index, enabled }) => {
+    const card = storage.getCard(cardId);
+    if (!card) throw new Error(`Card not found: ${cardId}`);
+    const target = card.tavernHelperScripts?.[index];
+    if (target) {
+      target.enabled = enabled;
+      storage.saveCard(card);
+    }
+    return {
+      content: [{ type: 'text', text: 'card helper script toggled' }],
       structuredContent: buildBootstrapPayload(),
     };
   },
