@@ -2,12 +2,15 @@
 
 ## 1. 当前状态与里程碑
 - **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agents `story-director`/`story-writer`）打造的本地互动小说与角色扮演创作引擎（Apache-2.0，零反代、零凭据抽取）。
-- **当前阶段**：**v0.8.1**（`/rp` 单窗口会话隔离 + 记忆插件 + 审计全量加固）已完成实现、测试、全量构建、本地重装并同步至 GitHub。
+- **当前阶段**：**v0.8.1**（已发布 GitHub Release；删除旧 `v0.8.0`），全量 11 套件 / 52 用例全绿，本地插件与 `origin/main` 完全同步。
 - **最近完成**：
-  - **`/rp` 快捷入口与会话级零污染隔离**：将技能 `story-engine` 重命名为 `/rp`（`plugin/skills/rp/SKILL.md`）；`SessionRuntime` 新增 `rpModeActive` 字段，在 `hook-pre-invocation.ts` 实现单窗口绑定（`/rp` 仅激活当前 `conversationId` 并自动呼出右侧面板，`/rp off` 退出当前窗口；其他普通 AGY 编程/问答窗口 100% 零注入零污染），并支持 RP 窗口内 OOC 面板呼出直通。
-  - **深度审计全量修复与一键安装引导**：修复导演钩子写手隔离/回调防重、`</script>` 沙箱逃逸、XSS/正则/MVU/高度回环/载荷预算/并发写入等 16 项高危与严重缺陷；`README.md` 补充本地插件自动启用引导与 `/rp` 上手说明，`scripts/install-plugin.mjs` 支持悬空软链清理与临时目录自动 `--copy`。
-  - **v0.8.0 记忆插件基础版（滑动窗口 + 逐楼小总结）**：新增 `src/core/memory-engine.ts`，支持总开关、每轮末尾提示词约束生成 ~200 字 `<memory_summary>`、精确按楼数切分滑动窗口（最新 N 楼完整正文，默认 10 楼；更早楼层替换为摘要）；侧边栏新增独立「记忆」Tab 与逐楼编辑；已在 `DEVELOPMENT.md` 写入 Phase 2–4 远期路线图。
-- **验证状态**：`npm test` **11 套件 / 50 用例全绿（0 skipped）**；`npm run build` & `npm run install:plugin` 通过。
+  - **v0.8.1 导演无回显路由 + MVU/状态栏通用兼容性升级**：
+    - 右侧阅读器发消息时先通过 `story_app_stage_director_input` 本地暂存真实原文，主窗口仅发送极简楼层触发信号 `第 #N 楼 · 开始演绎`，`hook-session-start.ts` 直接将 `[Current Turn User Input]` 交给 `story-writer`，主窗口彻底零冗余；导演提示词改为温和中性的 `[Story Director · Turn Router]`；
+    - `mvu-engine.ts` 支持多段 `[InitVar]*`（如 `[InitVar]1st`/`2nd`）深度合并、JSONC 注释与尾逗号容错、lodash 括号数组下标（`时间[0]`）、`<user>`/`<char>` 宏替换、`[数值, 描述]` 元组累加、`_.insert`/`_.remove`；
+    - `regex-engine.ts` 自动解包 `<details>` 内嵌完整 HTML 文档（根治关闭的 `<details>` 内 `innerText === ""` 坑），并补全展示正则 `<user>`/`<char>` 替换；`mcp-server.ts` 默认白名单纳入主流可信图床（ImgBB / Postimages / Catbox / Imgur / SM.MS / GitHub）与公共 CDN。
+  - **`/rp` 快捷入口与单窗口零污染隔离**：技能重命名为 `/rp`（`plugin/skills/rp/SKILL.md`），`SessionRuntime.rpModeActive` 按 `conversationId` 隔离，普通编程窗口 100% 零注入，`/rp off` 随时退出。
+  - **v0.8.0 记忆插件基础版 + 16 项高危审计修复**：独立「记忆」Tab + 滑动窗口逐楼小总结；修复导演写手隔离/防重、`</script>` 沙箱逃逸、XSS/正则/高度回环/载荷预算/并发写入等问题。
+- **验证状态**：`npm test` **11 套件 / 52 用例全绿（0 skipped）**；`npm run build` & `npm run install:plugin` 通过。
 
 ## 2. 架构约束与关键契约
 - **目录与分层红线**：

@@ -1,11 +1,11 @@
 # TavernInAGY 开发与维护手册 (`DEVELOPMENT.md`)
 
-> **当前版本**：`v0.7.5`（真·通用 MVU Zod v4 + 完整 Lodash 后台常驻沙箱 + 大卡前端解包/384KB 分片上传 + 多开场白翻页/直跳/初始态初始化 + 外链图床 CSP 修复 + 每层小铅笔编辑 + 10 楼分页懒加载 + 卡片/预设脚本独立开关，Git 标签 `v0.1.0` → `v0.7.4`，主分支最新 `v0.7.5`）
+> **当前版本**：`v0.8.1`（`/rp` 单窗口零污染会话隔离 + 导演无回显本地暂存路由 + 记忆插件基础版 + 16 项高危审计全量加固 + 多段 `[InitVar]*`/JSONC/括号路径 MVU 升级 + `<details>` 嵌套状态栏解包 + 主流图床 CSP 白名单，Git 标签 `v0.1.0` → `v0.7.4` → `v0.8.1`）
 > **定位**：基于 Antigravity 官方原生扩展体系（MCP Apps SEP-1865 + Local MCP Server + Lifecycle Hooks + Skill + Custom Agents）打造的本地互动小说与角色扮演创作侧边栏插件。
 > **合规底线**：100% 官方公开扩展路径，零反代、零 OAuth 凭据抽取、零无人自动循环（不使用 `Stop`/`PostInvocation` 续跑，无自动发送），绝不实现或承诺任何内容安全绕过机制。
 > **用户核心硬偏好（压缩/换窗绝不可忘）**：
 > 1. **永远保留 `story_commit_turn` 侧边栏单通道交付模式**：全部正文与预设显式思维链/规划/选项/状态标签仅通过 `story_commit_turn(narrative)` 提交至右侧暖墨阅读器，主聊天框仅输出 1 行极简楼层索引（如 `✦ 第 #N 楼已落笔至侧边栏`）。
-> 2. **除插件名 `TavernInAGY` 外全链路去 `tavern` 化**：所有发往云端的提示词、MCP 工具名（`story_*`）、Agents（`story-director` / `story-writer`）、Skill（`story-engine`）、UI 文案与公开文档均使用中性词汇；仅在纯本地 iframe 沙箱与卡片解析器内部静默保留运行期兼容别名。
+> 2. **除插件名 `TavernInAGY` 外全链路去 `tavern` 化**：所有发往云端的提示词、MCP 工具名（`story_*`）、Agents（`story-director` / `story-writer`）、Skill（`rp`）、UI 文案与公开文档均使用中性词汇；仅在纯本地 iframe 沙箱与卡片解析器内部静默保留运行期兼容别名。
 > 3. **严禁将私人样本提交进 Git**：`卡片参考/`、`预设参考/`、`我即浪潮-*.json`、`data/`、`*.chara.png` 均已在 `.gitignore` 中排除；全仓库唯一 Git 作者署名为 `FACK-ANTHROPEEC <302725614+FACK-ANTHROPEEC@users.noreply.github.com>`（已公开托管于 `https://github.com/FACK-ANTHROPEEC/Tavern-In-AGY.git`，开源协议 **Apache-2.0**）。
 > 4. **先呈报后执行**：任何关键重构或新功能开发前，先向用户呈报方案，获得认可后再动手；重 Roll 等交互遵循「撤回并填回输入框，由用户手动按 Enter 发送」，绝不替用户自动发送。
 
@@ -23,41 +23,42 @@ TavernInAGY/
 ├── src/
 │   ├── core/                      # 【零 AGY 依赖】纯 TypeScript 核心酒馆引擎
 │   │   ├── types.ts               # 统一数据模型（Card/Lorebook/Preset/RegexScript/StoryTurn/SessionRuntime/TavernConfig）
-│   │   ├── regex-engine.ts        # 通用 ST 正则引擎（minDepth/maxDepth/placement/markdownOnly/promptOnly/trimStrings/{{match}}/三路分流）
+│   │   ├── regex-engine.ts        # 通用 ST 正则引擎（消息级深度/placement/substituteRegex/单趟 $&/$$/$<name>/<user>/<char>/嵌套 <details> HTML 解包/XSS 消毒）
 │   │   ├── macro-engine.ts        # O(N) 栈式嵌套多行宏 + roll/pick/globalvar/incvar/lastUserMessage + JS-Slash-Runner 作用域变量宏
-│   │   ├── mvu-engine.ts          # 通用真 MVU（[initvar] / stat_data / RFC 6902 <json_?patch> / _.set/_.assign/_.unset/_.add / _ 只读保护）
+│   │   ├── mvu-engine.ts          # 通用真 MVU（多段 [InitVar]* 深度合并 + JSONC 容错 / stat_data / RFC 6902 / _.set/_.add/_.unset/_.assign/_.insert/_.remove + 括号路径 + _ 只读保护）
+│   │   ├── memory-engine.ts       # 记忆插件基础版（~200 字 <memory_summary> 提示词契约、标签提取/剥离、按楼数滑动窗口切分与旧楼摘录降级）
 │   │   ├── ejs-engine.ts          # 通用 ST-Prompt-Template (EJS) 渲染引擎（支持 static 与 postHistoryText）
 │   │   ├── card-parser.ts         # ST PNG (tEXt ccv3/chara) & JSON 解析 + alternate_greetings + 扩展/图床域名采集 + 内嵌世界书解析
-│   │   ├── preset-parser.ts       # ST 社区预设解析（prompt_order / 深度排序 / Prefill 软桥接 / 正则与助手脚本提取 / 空内容分组）
+│   │   ├── preset-parser.ts       # ST 社区预设解析（prompt_order 单次 EJS+Macro 求值 / 深度排序 / Prefill 软桥接 / 正则与助手脚本提取）
 │   │   ├── lorebook-engine.ts     # ST 世界书扫描（主/次关键词、正则、递归、预算 + AGY 冷却去重）
-│   │   ├── prompt-assembler.ts    # 严格 ST 顺序拼装器（含多开场白选择与开局 MVU 补丁）+ UTF-8 20KB 分块切分器 splitIntoInjectChunks()
-│   │   ├── story-log.ts           # 本地 JSONL 剧情楼层读写、编辑、回滚、无损多周目与 15 万上下文动态预算续接（含按深度 promptOnly 正则压缩）
-│   │   └── storage.ts             # 原子化本地 JSON 仓储（${PLUGIN_DATA} / TAVERN_DATA_DIR）
+│   │   ├── prompt-assembler.ts    # 严格 ST 顺序拼装器（含多开场白选择、记忆摘要契约与开局 MVU 补丁）+ UTF-8 20KB 分块切分器
+│   │   ├── story-log.ts           # 本地 JSONL 剧情楼层读写、编辑、记忆摘要编辑、回滚、无损多周目与滑动窗口/15 万预算续接
+│   │   └── storage.ts             # 原子化本地 JSON 仓储（Windows 并发 EPERM/EBUSY 重试 + 临时文件清理）
 │   ├── agy/                       # 【极薄 AGY 适配层】
 │   │   ├── transcript-reader.ts   # 防御性解析 transcript.jsonl
-│   │   ├── hook-session-start.ts  # SessionStart 钩子（单进程 20KB 多块 injectSteps + 15 万上下文动态续接 + 导演模式 5 分钟 TTL 握手 + 动态世界书扫描）
-│   │   ├── hook-pre-invocation.ts # PreInvocation 钩子（跳过 /slash、导演模式 0 设定注入 + 1 行调度锚点、SessionStart 兜底、同轮去重）
-│   │   └── mcp-server.ts          # MCP Server（resources/read 动态 CSP resourceDomains、384KB 分片上传、多开场白/编辑/脚本开关、宽容 story_commit_turn）
+│   │   ├── hook-session-start.ts  # SessionStart 钩子（20KB 多块 injectSteps + 滑动窗口/15 万续接 + 导演 5 分钟 TTL 握手 + [Current Turn User Input] 注入 + isWriterSubagent 标记）
+│   │   ├── hook-pre-invocation.ts # PreInvocation 钩子（/rp 会话级 rpModeActive 零污染隔离、/rp off 退出、OOC 面板放行、stagedSidePaneInput 无回显转交、回调防重状态机）
+│   │   └── mcp-server.ts          # MCP Server（主流图床 CSP 白名单 + 动态采集、384KB 分片上传、story_app_stage_director_input、轻载荷 story_open_panel、多开场白/记忆/回档同步）
 │   └── ui/                        # 【侧边栏 MCP App】React + Vite 单文件（暖墨衬线书卷风）
-│       ├── App.tsx                # 5-Tab 主界面（默认主页=「正文」直聊阅读器 + 10 楼分页懒加载 + 每层小铅笔编辑 + 多开场白翻页/直跳 + 卡片/预设脚本面板 + #send_textarea/#send_but 桥接）
+│       ├── App.tsx                # 6-Tab 等宽主界面（正文 / 角色 / 预设 / 世界书 / 记忆 / 状态与设置；右侧发送走本地暂存 + 主窗极简楼层触发信号）
 │       ├── png-unpack.ts          # 浏览器端 PNG V2/V3 本地解包（tEXt/iTXt）与 160px Canvas 缩略图压缩
-│       ├── FloorRenderer.tsx      # 通用三路楼层渲染器（正则优先 → 未知自定义 XML 标签通用自动折叠 → iframe 沙箱隔离 + 开场白跳转事件桥接）
-│       ├── sandbox-shim.ts        # 统一 CSP 安全 iframe srcDoc 底座（正版 Zod v4 / lodash-es / Mvu + registerMvuSchema + events / TavernHelper / getAllVariables / setChatMessages / 精确折叠高度收回）
-│       ├── MvuZodRuntimeHost.tsx  # 静默后台沙箱宿主（自动运行已启用助手脚本注册 Zod Schema 并派生回写 stat_data）
+│       ├── FloorRenderer.tsx      # 通用三路楼层渲染器（正则优先 → 未知自定义 XML 标签折叠 → 记忆摘要折叠/隐藏 → iframe 沙箱隔离）
+│       ├── sandbox-shim.ts        # 统一 CSP 安全 iframe srcDoc 底座（safeJsonForInlineScript 防 </script> 逃逸、正版 Zod v4 / lodash-es / Mvu / 防 100vh 高度回环）
+│       ├── MvuZodRuntimeHost.tsx  # 静默后台沙箱宿主（onLoad 同步与引用稳定化，自动运行助手脚本注册 Zod Schema 并回写 stat_data）
 │       ├── MvuTreeView.tsx        # 通用可折叠 stat_data 属性树
 │       ├── TavernFrontendHost.tsx # 通用侧边栏卡片前端美化 / 悬浮球舞台（全 iframe 沙箱，无 new Function）
-│       └── styles.css             # 暖深墨信纸横纹 + 宋体衬线 + 莫兰迪暖棕胶囊开关 + 滑块字号/行距变量绑定
+│       └── styles.css             # 暖深墨信纸横纹 + 宋体衬线 + 6 列等宽顶栏 + 滑块字号/行距变量绑定
 ├── plugin/                        # AGY 插件清单模板（由 install:plugin 复制至全局插件目录，安装前自动清理旧 agents/skills）
-│   ├── plugin.json                # 仅含官方合法顶层字段（v0.7.3）
+│   ├── plugin.json                # 仅含官方合法顶层字段（v0.8.1）
 │   ├── mcp_config.json            # 挂载 dist/agy/mcp-server.js
 │   ├── hooks.json                 # 挂载 SessionStart & PreInvocation（timeout: 20s）
 │   ├── agents/story-writer.md     # 纯净互动小说写手 Agent（内联 story_commit_turn 签名，禁止动笔前查库）
-│   ├── agents/story-director.md   # 单窗口导演调度 Agent（mainAgent: true + tools 白名单，每轮派发 story-writer 写完即毁）
-│   ├── skills/story-engine/SKILL.md # 互动小说协作规范（禁止编程/文件/终端工具）
+│   ├── agents/story-director.md   # 单窗口导演调度 Agent（温和中性 Turn Router，每轮派发 story-writer 写完即毁）
+│   ├── skills/rp/SKILL.md         # `/rp` 一键开玩与 `/rp off` 退出规范（单窗口零污染隔离）
 │   └── assets/logo.svg
-├── README.md & LICENSE            # 公开安装文档（含合规叠甲与生态致谢）与 Apache-2.0 协议
-├── scripts/install-plugin.mjs     # 一键安装至 ~/.gemini/config/plugins/tavern-in-agy
-└── tests/                         # Vitest 全合成单元测试（8套件/34通过/0跳过，零私人文件名）
+├── README.md & LICENSE            # 公开安装文档（含 AI 助手自动安装说明、合规叠甲与生态致谢）与 Apache-2.0 协议
+├── scripts/install-plugin.mjs     # 一键安装至 ~/.gemini/config/plugins/tavern-in-agy（自动清理悬空软链、临时目录自动 --copy）
+└── tests/                         # Vitest 全合成单元测试（11套件/52通过/0跳过，零私人文件名）
 ```
 
 ---

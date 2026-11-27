@@ -1,6 +1,6 @@
 {
   "name": "tavern-in-agy",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "license": "Apache-2.0",
   "description": "Local interactive fiction and character-card roleplay studio plugin built natively for Antigravity (MCP App + Local MCP Server + Lifecycle Hooks)",
   "type": "module",
