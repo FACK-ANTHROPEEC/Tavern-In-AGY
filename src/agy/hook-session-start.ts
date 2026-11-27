@@ -1,6 +1,6 @@
 import { TavernStorage } from '../core/storage.js';
 import { assembleSessionStart, splitIntoInjectChunks } from '../core/prompt-assembler.js';
-import { StoryLogStore } from '../core/story-log.js';
+import { StoryLogStore, resolveStoryKey } from '../core/story-log.js';
 import type { Lorebook } from '../core/types.js';
 
 interface SessionStartInput {
@@ -53,10 +53,10 @@ async function main(): Promise<void> {
 
   // In Director Mode, the main window (tavern-director) opens BEFORE any user message is sent,
   // so pendingDirectorInput is absent -> return {} (0 bytes) to keep the director's mind 100% clean.
-  // Only the freshly spawned tavern-rp subagent (within 60s of PreInvocation) consumes it and receives the full RP context.
+  // Only the freshly spawned story-writer subagent (within 5 min of PreInvocation) consumes it and receives the full context.
   const hasFreshDirectorInput =
     Boolean(shared.pendingDirectorInput) &&
-    Date.now() - (shared.pendingDirectorInputAt ?? 0) <= 60_000;
+    Date.now() - (shared.pendingDirectorInputAt ?? 0) <= 300_000;
 
   if (config.directorMode) {
     if (!hasFreshDirectorInput) {
@@ -104,7 +104,8 @@ async function main(): Promise<void> {
       activeRegexScripts,
     );
   } else {
-    const existingTurns = storyLog.readTurns(card.id);
+    const activeSlot = config.activeChatSlots?.[card.id] || 'default';
+    const existingTurns = storyLog.readTurns(resolveStoryKey(card.id, activeSlot));
     if (existingTurns.length > 0) {
       for (const t of existingTurns.slice(-6)) {
         if (t.userMessage) recentTurnTexts.push(t.userMessage);

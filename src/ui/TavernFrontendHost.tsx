@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { buildSandboxedSrcDoc, parseSlashCommandToMessage } from './sandbox-shim';
 
 export interface FrontendHtmlTemplate {
   name: string;
@@ -30,10 +31,10 @@ interface TavernFrontendHostProps {
 }
 
 /**
- * Generic side-pane host for SillyTavern card frontend beautification HTML
- * and JS-Slash-Runner (`tavern_helper`) floating-ball scripts.
- * Redirects `window.parent` / `document.body` into a scoped side-pane stage
- * so nothing ever touches AGY's main window DOM.
+ * Generic CSP-safe side-pane stage for Character Card card frontend beautification HTML
+ * and JS-Slash-Runner (`tavern_helper`) scripts.
+ * Renders inside an isolated `<iframe sandbox="allow-scripts" srcDoc>` (avoiding `unsafe-eval` / `new Function`
+ * and preventing any card CSS from polluting the side-pane UI).
  */
 export function TavernFrontendHost({
   frontend,
@@ -43,275 +44,83 @@ export function TavernFrontendHost({
   onSendSlashOrMessage,
   onUpdateStatData,
 }: TavernFrontendHostProps) {
-  const stageRef = useRef<HTMLDivElement | null>(null);
-  const listenersRef = useRef<Map<string, Array<(...args: unknown[]) => void>>>(new Map());
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [selectedTemplateIdx, setSelectedTemplateIdx] = useState(0);
-  const [mountedHtml, setMountedHtml] = useState(false);
-  const [mountedHelper, setMountedHelper] = useState(false);
+  const [mountMode, setMountMode] = useState<'none' | 'html' | 'helper'>('none');
+  const [mountRevision, setMountRevision] = useState(0);
+  const [frameHeight, setFrameHeight] = useState<number>(320);
   const [hostLog, setHostLog] = useState<string>('');
+  const widgetId = useMemo(() => `stage-${Math.random().toString(36).slice(2, 9)}`, []);
 
-  const statRef = useRef(statData);
-  statRef.current = statData;
-
-  // Notify registered TavernHelper listeners whenever statData updates
   useEffect(() => {
-    const map = listenersRef.current;
-    for (const evt of ['MESSAGE_RECEIVED', 'GENERATION_ENDED', 'VARIABLES_UPDATED', 'mvu_variable_update_ended']) {
-      for (const fn of map.get(evt) ?? []) {
-        try {
-          fn(statData);
-        } catch {
-          // ignore card script listener errors
-        }
+    const onMessage = (evt: MessageEvent) => {
+      const msg = evt.data;
+      if (!msg || typeof msg !== 'object' || msg.widgetId !== widgetId) return;
+      if (msg.type === 'tavern:resize' && typeof msg.height === 'number') {
+        setFrameHeight(Math.max(220, Math.min(900, Math.ceil(msg.height) + 16)));
+      } else if (msg.type === 'tavern:slash' && typeof msg.cmd === 'string') {
+        const parsed = parseSlashCommandToMessage(msg.cmd);
+        if (parsed) onSendSlashOrMessage(parsed);
+      } else if (msg.type === 'tavern:updateStat' && msg.statData && typeof msg.statData === 'object') {
+        onUpdateStatData(msg.statData as Record<string, unknown>);
+      } else if (msg.type === 'tavern:toast' && typeof msg.text === 'string' && msg.text.trim()) {
+        setHostLog(`卡片提示：${msg.text.trim()}`);
       }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [widgetId, onSendSlashOrMessage, onUpdateStatData]);
+
+  // Push live stat updates to mounted iframe without remounting
+  useEffect(() => {
+    if (mountMode === 'none') return;
+    try {
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: 'tavern:statSync', statData },
+        '*',
+      );
+    } catch {
+      // ignore
     }
-  }, [statData, storyTurns.length]);
+  }, [statData, storyTurns.length, mountMode]);
 
-  function buildRuntimeShim(mountRoot: HTMLElement) {
-    const emit = (evt: string, ...args: unknown[]) => {
-      for (const fn of listenersRef.current.get(evt) ?? []) {
-        try {
-          fn(...args);
-        } catch {
-          // ignore
-        }
-      }
-    };
-
-    const eventOn = (evt: string, fn: (...args: unknown[]) => void) => {
-      const list = listenersRef.current.get(evt) ?? [];
-      list.push(fn);
-      listenersRef.current.set(evt, list);
-    };
-
-    const getVariables = () => ({ stat_data: statRef.current, ...statRef.current });
-
-    const replaceVariables = (next: Record<string, unknown>) => {
-      const nextStat =
-        next && typeof next.stat_data === 'object' && next.stat_data
-          ? (next.stat_data as Record<string, unknown>)
-          : next;
-      statRef.current = nextStat;
-      onUpdateStatData(nextStat);
-      emit('VARIABLES_UPDATED', nextStat);
-    };
-
-    const insertOrAssignVariables = (patch: Record<string, unknown>) => {
-      const merged = { ...statRef.current, ...patch };
-      replaceVariables(merged);
-    };
-
-    const getChatMessages = () =>
-      storyTurns.map((t) => ({
-        message_id: t.index,
-        name: frontend.cardName,
-        role: 'assistant',
-        is_user: false,
-        message: t.narrative,
-        data: { stat_data: statRef.current },
-      }));
-
-    const triggerSlash = (cmd: string) => {
-      const cleaned = String(cmd || '').replace(/^\/send\s+/i, '').trim();
-      if (cleaned) onSendSlashOrMessage(cleaned);
-    };
-
-    const SillyTavern = {
-      getContext: () => ({
-        name1: userName,
-        name2: frontend.cardName,
-        characterId: 0,
-        characters: [
-          {
-            name: frontend.cardName,
-            data: {
-              name: frontend.cardName,
-              extensions: frontend.customExtensions,
-            },
-          },
-        ],
-        chat: getChatMessages(),
-        chatMetadata: { variables: getVariables() },
-      }),
-    };
-
-    const TavernHelper = {
-      getVariables,
-      replaceVariables,
-      insertOrAssignVariables,
-      getChatMessages,
-      triggerSlash,
-      eventOn,
-      eventEmit: emit,
-    };
-
-    // Redirect `document.body` to our scoped side-pane stage so floating balls stay inside the side pane!
-    const scopedDocument = new Proxy(document, {
-      get(target, prop) {
-        if (prop === 'body') return mountRoot;
-        const val = Reflect.get(target, prop);
-        return typeof val === 'function' ? val.bind(target) : val;
-      },
-    });
-
-    const scopedWindow = new Proxy(window, {
-      get(target, prop) {
-        if (prop === 'parent' || prop === 'top' || prop === 'self' || prop === 'window') {
-          return scopedWindow;
-        }
-        if (prop === 'document') return scopedDocument;
-        if (prop === 'TavernHelper') return TavernHelper;
-        if (prop === 'SillyTavern') return SillyTavern;
-        if (prop === 'getVariables') return getVariables;
-        if (prop === 'replaceVariables') return replaceVariables;
-        if (prop === 'insertOrAssignVariables') return insertOrAssignVariables;
-        if (prop === 'getChatMessages') return getChatMessages;
-        if (prop === 'triggerSlash') return triggerSlash;
-        if (prop === 'eventOn') return eventOn;
-        const val = Reflect.get(target, prop);
-        return typeof val === 'function' ? val.bind(target) : val;
-      },
-    });
-
-    return {
-      TavernHelper,
-      SillyTavern,
-      scopedDocument,
-      scopedWindow,
-      getVariables,
-      replaceVariables,
-      insertOrAssignVariables,
-      getChatMessages,
-      triggerSlash,
-      eventOn,
-    };
-  }
-
-  function mountHtmlTemplate() {
-    const stage = stageRef.current;
-    const tpl = frontend.htmlTemplates[selectedTemplateIdx];
-    if (!stage || !tpl) return;
-
-    stage.innerHTML = '';
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(tpl.html, 'text/html');
-
-    // Inject scoped styles + body markup
-    const wrapper = document.createElement('div');
-    wrapper.className = 'card-frontend-stage-inner';
-    doc.querySelectorAll('style').forEach((styleEl) => {
-      wrapper.appendChild(styleEl.cloneNode(true));
-    });
-
-    const bodyClone = document.createElement('div');
-    bodyClone.innerHTML = doc.body.innerHTML;
-    const scripts = Array.from(bodyClone.querySelectorAll('script'));
-    scripts.forEach((s) => s.remove());
-    wrapper.appendChild(bodyClone);
-    stage.appendChild(wrapper);
-
-    // Execute inline scripts against our generic TavernHelper shim
-    const shim = buildRuntimeShim(wrapper);
-    let okCount = 0;
-    let errMsg = '';
-    for (const sc of scripts) {
-      const code = sc.textContent || '';
-      if (!code.trim()) continue;
-      try {
-        const fn = new Function(
-          'window',
-          'parent',
-          'document',
-          'TavernHelper',
-          'SillyTavern',
-          'getVariables',
-          'replaceVariables',
-          'insertOrAssignVariables',
-          'getChatMessages',
-          'triggerSlash',
-          'eventOn',
-          code,
-        );
-        fn(
-          shim.scopedWindow,
-          shim.scopedWindow,
-          shim.scopedDocument,
-          shim.TavernHelper,
-          shim.SillyTavern,
-          shim.getVariables,
-          shim.replaceVariables,
-          shim.insertOrAssignVariables,
-          shim.getChatMessages,
-          shim.triggerSlash,
-          shim.eventOn,
-        );
-        okCount += 1;
-      } catch (err) {
-        errMsg = String(err);
-      }
+  const srcDoc = useMemo(() => {
+    if (mountMode === 'none') return '';
+    if (mountMode === 'html') {
+      const tpl = frontend.htmlTemplates[selectedTemplateIdx];
+      if (!tpl) return '';
+      return buildSandboxedSrcDoc(tpl.html, {
+        widgetId,
+        charName: frontend.cardName,
+        userName,
+        statData,
+        storyTurns,
+        customExtensions: frontend.customExtensions,
+      });
     }
-
-    setMountedHtml(true);
-    setHostLog(
-      errMsg
-        ? `已挂载「${tpl.name}」（执行 ${okCount} 段脚本，部分兼容性提示：${errMsg.slice(0, 80)}）`
-        : `已成功在侧边栏挂载「${tpl.name}」（运行 ${okCount} 段脚本）`,
-    );
-  }
-
-  function mountHelperScripts() {
-    const stage = stageRef.current;
-    if (!stage || frontend.helperScripts.length === 0) return;
-
-    const shim = buildRuntimeShim(stage);
-    let okCount = 0;
-    let errMsg = '';
-    for (const sc of frontend.helperScripts) {
-      try {
-        const fn = new Function(
-          'window',
-          'parent',
-          'document',
-          'TavernHelper',
-          'SillyTavern',
-          'getVariables',
-          'replaceVariables',
-          'insertOrAssignVariables',
-          'getChatMessages',
-          'triggerSlash',
-          'eventOn',
-          sc.content,
-        );
-        fn(
-          shim.scopedWindow,
-          shim.scopedWindow,
-          shim.scopedDocument,
-          shim.TavernHelper,
-          shim.SillyTavern,
-          shim.getVariables,
-          shim.replaceVariables,
-          shim.insertOrAssignVariables,
-          shim.getChatMessages,
-          shim.triggerSlash,
-          shim.eventOn,
-        );
-        okCount += 1;
-      } catch (err) {
-        errMsg = String(err);
-      }
-    }
-    setMountedHelper(true);
-    setHostLog(
-      errMsg
-        ? `已加载 ${okCount}/${frontend.helperScripts.length} 个助手脚本（兼容提示：${errMsg.slice(0, 80)}）`
-        : `已将 ${okCount} 个酒馆助手脚本挂载到侧边栏舞台！`,
-    );
-  }
+    // Helper scripts mode: wrap all enabled helper scripts inside an isolated stage document
+    const scriptTags = frontend.helperScripts
+      .map(
+        (sc) =>
+          `<script>\n// ${sc.name.replace(/-->/g, '')}\ntry {\n${sc.content.replace(/<\/script>/gi, '<\\/script>')}\n} catch (e) { console.error(e); }\n</script>`,
+      )
+      .join('\n');
+    const helperHtml = `<div id="tavern-helper-stage" style="min-height:240px;position:relative;"></div>\n${scriptTags}`;
+    return buildSandboxedSrcDoc(helperHtml, {
+      widgetId,
+      charName: frontend.cardName,
+      userName,
+      statData,
+      storyTurns,
+      customExtensions: frontend.customExtensions,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mountMode, mountRevision, selectedTemplateIdx, frontend, widgetId, userName]);
 
   return (
     <div className="card-box">
       <div className="row">
-        <strong>角色卡前端美化 / 悬浮球舞台（TavernHelper 垫片）</strong>
+        <strong>角色卡前端美化 / 悬浮球舞台（隔离 iframe 沙箱）</strong>
       </div>
 
       {frontend.htmlTemplates.length > 0 && (
@@ -327,8 +136,16 @@ export function TavernFrontendHost({
               </option>
             ))}
           </select>
-          <button className="btn btn-primary" onClick={mountHtmlTemplate}>
-            {mountedHtml ? '重新渲染' : '渲染状态栏'}
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              const tpl = frontend.htmlTemplates[selectedTemplateIdx];
+              setMountMode('html');
+              setMountRevision((r) => r + 1);
+              setHostLog(`已在独立沙箱 iframe 中渲染「${tpl?.name ?? '状态栏'}」`);
+            }}
+          >
+            {mountMode === 'html' ? '重新渲染' : '渲染状态栏'}
           </button>
         </div>
       )}
@@ -336,27 +153,40 @@ export function TavernFrontendHost({
       {frontend.helperScripts.length > 0 && (
         <div className="row">
           <span className="muted">
-            检测到 {frontend.helperScripts.length} 个酒馆助手脚本（{frontend.helperScripts.map((s) => s.name).join('、')}）
+            检测到 {frontend.helperScripts.length} 个卡片扩展脚本（{frontend.helperScripts.map((s) => s.name).join('、')}）
           </span>
-          <button className="btn" onClick={mountHelperScripts}>
-            {mountedHelper ? '已挂载' : '挂载到侧边栏'}
+          <button
+            className="btn"
+            onClick={() => {
+              setMountMode('helper');
+              setMountRevision((r) => r + 1);
+              setHostLog(`已将 ${frontend.helperScripts.length} 个卡片扩展脚本挂载至独立沙箱舞台`);
+            }}
+          >
+            {mountMode === 'helper' ? '重新挂载' : '挂载到侧边栏'}
           </button>
         </div>
       )}
 
       {hostLog && <div className="muted">{hostLog}</div>}
 
-      <div
-        ref={stageRef}
-        className="frontend-stage"
-        style={{
-          position: 'relative',
-          minHeight: mountedHtml || mountedHelper ? 260 : 0,
-          overflow: 'auto',
-          border: mountedHtml || mountedHelper ? '1px solid var(--ink-border)' : 'none',
-          borderRadius: 2,
-        }}
-      />
+      {mountMode !== 'none' && srcDoc && (
+        <iframe
+          key={`${mountMode}-${mountRevision}-${selectedTemplateIdx}`}
+          ref={iframeRef}
+          title="Tavern Card Frontend Sandbox"
+          className="inline-widget-frame"
+          sandbox="allow-scripts"
+          srcDoc={srcDoc}
+          style={{
+            width: '100%',
+            height: frameHeight,
+            border: '1px solid var(--ink-border)',
+            borderRadius: 2,
+            background: 'transparent',
+          }}
+        />
+      )}
     </div>
   );
 }

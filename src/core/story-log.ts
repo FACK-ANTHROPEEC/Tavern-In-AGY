@@ -1,10 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { RegexScript, StoryTurn } from './types.js';
+import type { ChatSlotSummary, RegexScript, StoryTurn } from './types.js';
 import { applyRegexScripts } from './regex-engine.js';
 
 function safeKey(key: string): string {
   return key.replace(/[^a-zA-Z0-9_\-\u4e00-\u9fa5]/g, '_');
+}
+
+export function resolveStoryKey(cardId: string, slotId?: string): string {
+  const base = cardId || 'default';
+  if (!slotId || slotId === 'default') return base;
+  return `${base}__slot_${slotId}`;
 }
 
 export class StoryLogStore {
@@ -19,6 +25,74 @@ export class StoryLogStore {
 
   private filePath(storyKey: string): string {
     return path.join(this.storiesDir, `${safeKey(storyKey)}.jsonl`);
+  }
+
+  /**
+   * Lists all playthrough chat slots for a given card (backward-compatible with legacy `<cardId>.jsonl` as `'default'`).
+   */
+  listSlots(cardId: string, activeSlotId = 'default'): ChatSlotSummary[] {
+    const safeCard = safeKey(cardId || 'default');
+    const prefix = `${safeCard}__slot_`;
+    const files = fs.existsSync(this.storiesDir) ? fs.readdirSync(this.storiesDir) : [];
+
+    const slotIds = new Set<string>(['default']);
+    if (activeSlotId) slotIds.add(activeSlotId);
+
+    for (const f of files) {
+      if (!f.endsWith('.jsonl')) continue;
+      const stem = f.slice(0, -6);
+      if (stem === safeCard) {
+        slotIds.add('default');
+      } else if (stem.startsWith(prefix)) {
+        slotIds.add(stem.slice(prefix.length));
+      }
+    }
+
+    const items: ChatSlotSummary[] = [];
+    let extraIndex = 2;
+    const orderedIds = Array.from(slotIds).sort((a, b) => {
+      if (a === 'default') return -1;
+      if (b === 'default') return 1;
+      return a.localeCompare(b);
+    });
+
+    for (const slotId of orderedIds) {
+      const storyKey = resolveStoryKey(cardId, slotId);
+      const p = this.filePath(storyKey);
+      const turns = this.readTurns(storyKey);
+      const stat = fs.existsSync(p) ? fs.statSync(p) : null;
+      const updatedAt = turns[turns.length - 1]?.createdAt ?? stat?.mtime.toISOString() ?? '';
+      const label =
+        slotId === 'default'
+          ? `存档 1 · ${turns.length}轮`
+          : `存档 ${extraIndex++} · ${turns.length}轮`;
+      items.push({
+        slotId,
+        storyKey,
+        label,
+        turnCount: turns.length,
+        updatedAt,
+      });
+    }
+
+    return items;
+  }
+
+  createSlot(cardId: string): { slotId: string; storyKey: string } {
+    const slotId = `${Date.now()}`;
+    const storyKey = resolveStoryKey(cardId, slotId);
+    const p = this.filePath(storyKey);
+    if (!fs.existsSync(p)) {
+      fs.writeFileSync(p, '', 'utf8');
+    }
+    return { slotId, storyKey };
+  }
+
+  deleteSlot(storyKey: string): void {
+    const p = this.filePath(storyKey);
+    if (fs.existsSync(p)) {
+      fs.unlinkSync(p);
+    }
   }
 
   readTurns(storyKey: string): StoryTurn[] {
@@ -119,7 +193,8 @@ export class StoryLogStore {
 
   private rewrite(storyKey: string, turns: StoryTurn[]): void {
     const p = this.filePath(storyKey);
-    const tmp = `${p}.${process.pid}.tmp`;
+    const nonce = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 7)}`;
+    const tmp = `${p}.${nonce}.tmp`;
     const body = turns.map((t) => JSON.stringify(t)).join('\n') + (turns.length ? '\n' : '');
     fs.writeFileSync(tmp, body, 'utf8');
     fs.renameSync(tmp, p);

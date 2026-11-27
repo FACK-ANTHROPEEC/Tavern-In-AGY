@@ -28,7 +28,8 @@ function ensureDir(dir: string): void {
 
 function writeJsonAtomic(filePath: string, data: unknown): void {
   ensureDir(path.dirname(filePath));
-  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  const nonce = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 7)}`;
+  const tmpPath = `${filePath}.${nonce}.tmp`;
   fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf8');
   fs.renameSync(tmpPath, filePath);
 }

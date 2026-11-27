@@ -1,8 +1,8 @@
 {
   "name": "tavern-in-agy",
   "displayName": "TavernInAGY",
-  "version": "0.7.0",
-  "description": "SillyTavern-compatible Roleplay engine for Antigravity with PNG/JSON character cards, World Info, community presets, and a side-pane console.",
+  "version": "0.7.3",
+  "description": "Interactive fiction and character-card roleplay studio plugin for Antigravity with PNG/JSON character cards, World Info, presets, and a side-pane reader.",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
     "Open the TavernInAGY side-pane console",

@@ -57,20 +57,43 @@ describe('StoryLogStore (JSONL story log & rollback)', () => {
     // Roll back exclusively on turn 1 (delete everything from turn 1 onward)
     expect(store.rollbackToTurn('card-1', t1.turnId, false)).toHaveLength(0);
   });
+
+  it('supports non-destructive multi-playthrough chat slots per card', () => {
+    const dir = makeTmpDir();
+    const store = new StoryLogStore(dir);
+
+    store.appendTurn('card-x', { narrative: '第一周目第一楼' });
+    const slot2 = store.createSlot('card-x');
+    store.appendTurn(slot2.storyKey, { narrative: '第二周目全新开局' });
+
+    const slots = store.listSlots('card-x', slot2.slotId);
+    expect(slots).toHaveLength(2);
+    expect(slots[0].slotId).toBe('default');
+    expect(slots[0].turnCount).toBe(1);
+    expect(slots[1].slotId).toBe(slot2.slotId);
+    expect(slots[1].turnCount).toBe(1);
+
+    // Original playthrough remains completely intact
+    expect(store.readTurns('card-x')[0].narrative).toBe('第一周目第一楼');
+    expect(store.readTurns(slot2.storyKey)[0].narrative).toBe('第二周目全新开局');
+
+    store.deleteSlot(slot2.storyKey);
+    expect(store.listSlots('card-x', 'default')).toHaveLength(1);
+  });
 });
 
-describe('Built-in tavern-rp & tavern-director Custom Agent manifests', () => {
-  it('exists with valid frontmatter and tavern_commit_turn guidance', () => {
-    const agentPath = path.resolve(process.cwd(), 'plugin', 'agents', 'tavern-rp.md');
+describe('Built-in story-writer & story-director Custom Agent manifests', () => {
+  it('exists with valid frontmatter and story_commit_turn guidance', () => {
+    const agentPath = path.resolve(process.cwd(), 'plugin', 'agents', 'story-writer.md');
     expect(fs.existsSync(agentPath)).toBe(true);
     const md = fs.readFileSync(agentPath, 'utf8');
-    expect(md).toContain('name: tavern-rp');
-    expect(md).toContain('tavern_commit_turn');
+    expect(md).toContain('name: story-writer');
+    expect(md).toContain('story_commit_turn');
 
-    const directorPath = path.resolve(process.cwd(), 'plugin', 'agents', 'tavern-director.md');
+    const directorPath = path.resolve(process.cwd(), 'plugin', 'agents', 'story-director.md');
     expect(fs.existsSync(directorPath)).toBe(true);
     const directorMd = fs.readFileSync(directorPath, 'utf8');
-    expect(directorMd).toContain('name: tavern-director');
+    expect(directorMd).toContain('name: story-director');
     expect(directorMd).toContain('invoke_subagent');
     expect(directorMd).toContain('manage_subagents');
   });

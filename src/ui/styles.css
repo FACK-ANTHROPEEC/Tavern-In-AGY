@@ -18,6 +18,9 @@
   --ink-accent-soft: rgba(184, 163, 131, 0.14);
   --ink-danger: #a8554e;
   --font-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", "FangSong", Georgia, serif;
+  --prose-font-size: 14px;
+  --prose-line-height: 1.7;
+  --reading-max-width: 100%;
 }
 
 * {
@@ -86,6 +89,19 @@ body {
   flex-direction: column;
   gap: 10px;
   padding: 4px 2px 8px 0;
+}
+
+.chat-stream > .story-paper,
+.chat-stream > .user-bubble {
+  width: 100%;
+  max-width: var(--reading-max-width);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.story-prose {
+  font-size: var(--prose-font-size);
+  line-height: var(--prose-line-height);
 }
 
 .user-bubble {

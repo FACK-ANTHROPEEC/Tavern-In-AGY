@@ -8,14 +8,14 @@ import { TavernStorage } from '../core/storage.js';
 import { parseCharacterCardJson, parseCharacterCardPng } from '../core/card-parser.js';
 import { parsePresetJson } from '../core/preset-parser.js';
 import { parseLorebookJson, scanLorebooks } from '../core/lorebook-engine.js';
-import { StoryLogStore } from '../core/story-log.js';
+import { StoryLogStore, resolveStoryKey } from '../core/story-log.js';
 import { applyMvuUpdates, extractInitVarFromLorebooks } from '../core/mvu-engine.js';
-import type { CharacterCard, Lorebook } from '../core/types.js';
+import { createDefaultState, type CharacterCard, type Lorebook, type TavernConfig } from '../core/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const APP_URI = 'ui://tavern/app.html';
+const APP_URI = 'ui://story-studio/app.html';
 const DEFAULT_SESSION_ID = 'default';
 
 const storage = new TavernStorage();
@@ -60,6 +60,43 @@ function initCardMvuIfEmpty(card: CharacterCard, userName: string): Record<strin
   return extractInitVarFromLorebooks(books, userName) ?? {};
 }
 
+function getActiveStoryKey(config: TavernConfig): string {
+  const cardId = config.activeCardId || 'default';
+  const slotId = config.activeChatSlots?.[cardId] || 'default';
+  return resolveStoryKey(cardId, slotId);
+}
+
+function syncSessionToStoryKey(config: TavernConfig, storyKey: string): void {
+  const session = storage.getSession(DEFAULT_SESSION_ID);
+  const turns = storyLog.readTurns(storyKey);
+  const lastTurn = turns[turns.length - 1];
+  const lastTurnWithStat = [...turns].reverse().find((t) => t.statData && Object.keys(t.statData).length > 0);
+
+  if (lastTurnWithStat?.statData) {
+    session.statData = lastTurnWithStat.statData;
+  } else if (config.activeCardId) {
+    const card = storage.getCard(config.activeCardId);
+    session.statData = card ? initCardMvuIfEmpty(card, config.userName || 'User') : {};
+  } else {
+    session.statData = {};
+  }
+
+  if (lastTurn?.statsSnapshot) {
+    session.state = {
+      ...createDefaultState(),
+      location: lastTurn.statsSnapshot.location ?? '',
+      timeOfDay: lastTurn.statsSnapshot.timeOfDay ?? '',
+      mood: lastTurn.statsSnapshot.mood ?? '',
+      outfit: lastTurn.statsSnapshot.outfit ?? '',
+      affection: lastTurn.statsSnapshot.affection ?? 0,
+    };
+  } else {
+    session.state = createDefaultState();
+  }
+  session.latestOptions = lastTurn?.options ?? [];
+  storage.saveSession(session);
+}
+
 function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
   const config = storage.getConfig();
   const cards = storage.listCards();
@@ -67,8 +104,11 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
   const lorebooks = storage.listLorebooks();
   const snapshots = storage.listSnapshots();
   const session = storage.getSession(DEFAULT_SESSION_ID);
-  const storyKey = config.activeCardId || 'default';
+  const cardId = config.activeCardId || 'default';
+  const activeChatSlot = config.activeChatSlots?.[cardId] || 'default';
+  const storyKey = resolveStoryKey(cardId, activeChatSlot);
   const storyTurns = storyLog.readTurns(storyKey);
+  const chatSlots = config.activeCardId ? storyLog.listSlots(config.activeCardId, activeChatSlot) : [];
 
   const activeCardObj = config.activeCardId ? cards.find((c) => c.id === config.activeCardId) : undefined;
   const activePresetObj = config.activePresetId ? presets.find((p) => p.id === config.activePresetId) : undefined;
@@ -155,6 +195,8 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
     statData: session.statData ?? {},
     latestOptions: session.latestOptions,
     storyTurns: storyTurns.slice(-50),
+    chatSlots,
+    activeChatSlot,
     dataDir: storage.rootDir,
   };
 }
@@ -193,7 +235,7 @@ server.resource(
 
 // Side-pane & Global Entrypoint Tool
 server.registerTool(
-  'tavern_open_panel',
+  'story_open_panel',
   {
     title: 'TavernInAGY',
     description: 'Open the TavernInAGY Roleplay console in the side pane.',
@@ -227,11 +269,11 @@ server.registerTool(
 // --- Model-Visible RP Engine Tools ---
 
 server.registerTool(
-  'tavern_commit_turn',
+  'story_commit_turn',
   {
     title: 'Commit RP Turn & Refresh MVU Panel',
     description:
-      'Primary single-delivery channel for TavernInAGY RP turns. Pass the complete narrative (including any preset CoT/formatting tags like <wave_plan>, <think_nya>, <thinking>, <update>, <wave_options>) in `narrative` so the side-pane Warm Ink Serif reader renders and beautifies it directly, persists the JSONL floor, and applies MVU updates. Do not duplicate story prose in the main chat reply—reply with only a 1-line status index after calling this tool.',
+      'Primary single-delivery channel for TavernInAGY RP turns. Pass the complete turn output (including all preset/card CoT, option tags, MVU <update> blocks, <StatusPlaceHolderImpl/>, and story prose) in `narrative` so the side-pane renderer applies preset & card display regexes faithfully, persists the JSONL floor, and applies MVU updates. Do not duplicate story prose in the main chat reply—reply with only a 1-line status index after calling this tool.',
     inputSchema: {
       conversationId: z.string().nullish(),
       userMessage: z.string().nullish(),
@@ -311,14 +353,17 @@ server.registerTool(
         return { label, category: (o.category ?? label).trim(), text };
       })
       .filter((o) => o.text.length > 0);
-    if (normalizedOptions.length > 0) {
-      session.latestOptions = normalizedOptions;
-    }
+    const resolvedUserMessage =
+      (args.userMessage && args.userMessage.trim()) ||
+      (session.lastUserInputForCommit && session.lastUserInputForCommit.trim()) ||
+      undefined;
+    session.lastUserInputForCommit = undefined;
+    session.latestOptions = normalizedOptions;
     storage.saveSession(session);
 
-    const storyKey = config.activeCardId || 'default';
+    const storyKey = getActiveStoryKey(config);
     const turn = storyLog.appendTurn(storyKey, {
-      userMessage: args.userMessage ?? undefined,
+      userMessage: resolvedUserMessage,
       narrative: mvuRes.cleanedText || args.narrative,
       thought: args.thought ?? undefined,
       statsSnapshot: {
@@ -352,7 +397,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_get_state',
+  'story_get_state',
   {
     title: 'Get Live RP State & MVU stat_data',
     description:
@@ -382,7 +427,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_update_state',
+  'story_update_state',
   {
     title: 'Update Live RP State',
     description:
@@ -427,7 +472,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_search_lorebook',
+  'story_search_lorebook',
   {
     title: 'Search Active Lorebooks',
     description: 'Search active World Info / Lorebooks and embedded character book by query text.',
@@ -469,7 +514,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_save_snapshot',
+  'story_save_snapshot',
   {
     title: 'Save Story Snapshot',
     description:
@@ -509,7 +554,7 @@ server.registerTool(
 const APP_ONLY_META = { ui: { visibility: ['app'] as const } };
 
 server.registerTool(
-  'tavern_app_bootstrap',
+  'story_app_bootstrap',
   {
     title: 'Bootstrap App Data',
     description: 'Fetch all cards, presets, lorebooks, config, MVU stat_data, story turns, and session state for the side-pane UI.',
@@ -523,7 +568,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_get_card_frontend',
+  'story_app_get_card_frontend',
   {
     title: 'Get Active Card Frontend Assets',
     description: 'Fetch the active card HTML status-bar regexes, tavern_helper scripts, and custom extensions for the side-pane TavernHelper shim.',
@@ -568,10 +613,10 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_import_card',
+  'story_app_import_card',
   {
     title: 'Import Character Card',
-    description: 'Import a SillyTavern PNG or JSON character card.',
+    description: 'Import a Character Card PNG or JSON character card.',
     inputSchema: {
       filename: z.string(),
       contentBase64: z.string(),
@@ -602,10 +647,10 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_import_preset',
+  'story_app_import_preset',
   {
     title: 'Import Community Preset',
-    description: 'Import a SillyTavern Chat Completion Preset JSON.',
+    description: 'Import a Character Card Chat Completion Preset JSON.',
     inputSchema: {
       filename: z.string(),
       jsonText: z.string(),
@@ -629,10 +674,10 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_import_lorebook',
+  'story_app_import_lorebook',
   {
     title: 'Import World Info Lorebook',
-    description: 'Import a SillyTavern World Info JSON.',
+    description: 'Import a Character Card World Info JSON.',
     inputSchema: {
       filename: z.string(),
       jsonText: z.string(),
@@ -659,7 +704,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_toggle_preset_prompt',
+  'story_app_toggle_preset_prompt',
   {
     title: 'Toggle Preset Prompt Item',
     description: 'Enable or disable a single prompt item inside a preset.',
@@ -686,7 +731,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_get_preset_prompt',
+  'story_app_get_preset_prompt',
   {
     title: 'Get Preset Prompt Full Content',
     description: 'Fetch the full content and metadata of a single prompt item inside a preset for inline editing.',
@@ -709,7 +754,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_edit_preset_prompt',
+  'story_app_edit_preset_prompt',
   {
     title: 'Edit Preset Prompt Content',
     description: 'Update the content or role of a single prompt item inside a preset.',
@@ -739,7 +784,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_toggle_preset_regex',
+  'story_app_toggle_preset_regex',
   {
     title: 'Toggle Preset Regex Script',
     description: 'Enable or disable a regex script inside a preset.',
@@ -766,7 +811,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_update_config',
+  'story_app_update_config',
   {
     title: 'Update Tavern Config',
     description: 'Update active card, preset, lorebooks, user persona, or injection settings.',
@@ -782,30 +827,31 @@ server.registerTool(
       enablePostHistoryInjection: z.boolean().optional(),
       statelessPerTurn: z.boolean().optional(),
       directorMode: z.boolean().optional(),
+      uiScale: z.number().min(80).max(130).optional(),
+      proseFontSize: z.number().min(12).max(22).optional(),
+      proseLineHeight: z.number().min(1.4).max(2.2).optional(),
+      maxReadingWidth: z.number().min(0).max(1400).optional(),
+      enableRegexBeautify: z.boolean().optional(),
+      unknownTagMode: z.enum(['fold', 'keep', 'hide']).optional(),
+      authorsNote: z.string().optional(),
+      authorsNoteEnabled: z.boolean().optional(),
     },
     _meta: APP_ONLY_META,
   },
   async (patch) => {
     const prev = storage.getConfig();
     const next = storage.saveConfig(patch);
-    // When switching active card, initialize statData from latest turn or card [initvar]
+    // When switching active card, restore active chat slot's statData or card [initvar]
     if (patch.activeCardId !== undefined && patch.activeCardId !== prev.activeCardId) {
-      const session = storage.getSession(DEFAULT_SESSION_ID);
       if (patch.activeCardId) {
-        const card = storage.getCard(patch.activeCardId);
-        const turns = storyLog.readTurns(patch.activeCardId);
-        const lastTurnWithStat = [...turns].reverse().find((t) => t.statData && Object.keys(t.statData).length > 0);
-        if (lastTurnWithStat?.statData) {
-          session.statData = lastTurnWithStat.statData;
-        } else if (card) {
-          session.statData = initCardMvuIfEmpty(card, next.userName || 'User');
-        } else {
-          session.statData = {};
-        }
+        syncSessionToStoryKey(next, getActiveStoryKey(next));
       } else {
+        const session = storage.getSession(DEFAULT_SESSION_ID);
         session.statData = {};
+        session.state = createDefaultState();
+        session.latestOptions = [];
+        storage.saveSession(session);
       }
-      storage.saveSession(session);
     }
     return {
       content: [{ type: 'text', text: 'config updated' }],
@@ -815,7 +861,109 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_set_stat_data',
+  'story_app_new_chat_slot',
+  {
+    title: 'Start New Playthrough Chat Slot',
+    description:
+      'Create a brand-new playthrough chat log for the active card without deleting previous playthroughs, and reset MVU stat_data from [initvar].',
+    inputSchema: {},
+    _meta: APP_ONLY_META,
+  },
+  async () => {
+    const config = storage.getConfig();
+    if (!config.activeCardId) {
+      return {
+        content: [{ type: 'text', text: 'no active card' }],
+        structuredContent: buildBootstrapPayload(),
+      };
+    }
+    const { slotId, storyKey } = storyLog.createSlot(config.activeCardId);
+    const next = storage.saveConfig({
+      activeChatSlots: {
+        ...(config.activeChatSlots ?? {}),
+        [config.activeCardId]: slotId,
+      },
+    });
+    syncSessionToStoryKey(next, storyKey);
+    return {
+      content: [{ type: 'text', text: `created new playthrough slot ${slotId}` }],
+      structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'story_app_switch_chat_slot',
+  {
+    title: 'Switch Playthrough Chat Slot',
+    description: 'Switch the active character card to an existing saved playthrough chat slot.',
+    inputSchema: {
+      slotId: z.string(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ slotId }) => {
+    const config = storage.getConfig();
+    if (!config.activeCardId) {
+      return {
+        content: [{ type: 'text', text: 'no active card' }],
+        structuredContent: buildBootstrapPayload(),
+      };
+    }
+    const next = storage.saveConfig({
+      activeChatSlots: {
+        ...(config.activeChatSlots ?? {}),
+        [config.activeCardId]: slotId || 'default',
+      },
+    });
+    syncSessionToStoryKey(next, getActiveStoryKey(next));
+    return {
+      content: [{ type: 'text', text: `switched to slot ${slotId}` }],
+      structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'story_app_delete_chat_slot',
+  {
+    title: 'Delete Playthrough Chat Slot',
+    description: 'Permanently delete a specific playthrough chat slot for the active card.',
+    inputSchema: {
+      slotId: z.string(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ slotId }) => {
+    const config = storage.getConfig();
+    if (!config.activeCardId) {
+      return {
+        content: [{ type: 'text', text: 'no active card' }],
+        structuredContent: buildBootstrapPayload(),
+      };
+    }
+    const storyKey = resolveStoryKey(config.activeCardId, slotId);
+    storyLog.deleteSlot(storyKey);
+    const currentSlot = config.activeChatSlots?.[config.activeCardId] || 'default';
+    let next = config;
+    if (currentSlot === slotId) {
+      next = storage.saveConfig({
+        activeChatSlots: {
+          ...(config.activeChatSlots ?? {}),
+          [config.activeCardId]: 'default',
+        },
+      });
+    }
+    syncSessionToStoryKey(next, getActiveStoryKey(next));
+    return {
+      content: [{ type: 'text', text: `deleted slot ${slotId}` }],
+      structuredContent: buildBootstrapPayload(),
+    };
+  },
+);
+
+server.registerTool(
+  'story_app_set_stat_data',
   {
     title: 'Update MVU stat_data from Side-Pane Shim',
     description: 'Persist stat_data changes triggered by a card frontend or TavernHelper shim.',
@@ -836,7 +984,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_edit_turn',
+  'story_app_edit_turn',
   {
     title: 'Edit Story Turn Narrative',
     description: 'Edit a committed turn narrative in the local JSONL story log.',
@@ -848,7 +996,7 @@ server.registerTool(
   },
   async ({ turnId, narrative }) => {
     const config = storage.getConfig();
-    storyLog.editTurn(config.activeCardId || 'default', turnId, narrative);
+    storyLog.editTurn(getActiveStoryKey(config), turnId, narrative);
     return {
       content: [{ type: 'text', text: 'turn edited' }],
       structuredContent: buildBootstrapPayload(),
@@ -857,7 +1005,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_rollback_turn',
+  'story_app_rollback_turn',
   {
     title: 'Rollback or Delete Story Turn (with MVU stat_data restore)',
     description:
@@ -870,8 +1018,8 @@ server.registerTool(
   },
   async ({ turnId, inclusive }) => {
     const config = storage.getConfig();
-    const cardId = config.activeCardId || 'default';
-    const kept = storyLog.rollbackToTurn(cardId, turnId, inclusive);
+    const storyKey = getActiveStoryKey(config);
+    const kept = storyLog.rollbackToTurn(storyKey, turnId, inclusive);
 
     // Restore MVU stat_data to the exact rolled-back floor!
     const session = storage.getSession(DEFAULT_SESSION_ID);
@@ -892,7 +1040,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_prepare_fork',
+  'story_app_prepare_fork',
   {
     title: 'Prepare Branched Session Fork',
     description: 'Stage the current edited/rolled-back JSONL story log and MVU stat_data so the next new conversation resumes seamlessly.',
@@ -903,7 +1051,7 @@ server.registerTool(
     const config = storage.getConfig();
     const cardId = config.activeCardId || 'default';
     const session = storage.getSession(DEFAULT_SESSION_ID);
-    const turns = storyLog.readTurns(cardId);
+    const turns = storyLog.readTurns(getActiveStoryKey(config));
     storage.setPendingFork({
       cardId,
       turns,
@@ -923,7 +1071,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_toggle_card_lore_entry',
+  'story_app_toggle_card_lore_entry',
   {
     title: 'Toggle Embedded Card Lorebook Entry',
     description: 'Enable or disable a single entry inside a character card embedded lorebook.',
@@ -950,7 +1098,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  'tavern_app_delete_asset',
+  'story_app_delete_asset',
   {
     title: 'Delete Tavern Asset',
     description: 'Delete a card, preset, or lorebook by id.',
@@ -961,7 +1109,17 @@ server.registerTool(
     _meta: APP_ONLY_META,
   },
   async ({ kind, id }) => {
-    if (kind === 'card') storage.deleteCard(id);
+    const prevCardId = storage.getConfig().activeCardId;
+    if (kind === 'card') {
+      storage.deleteCard(id);
+      if (prevCardId === id) {
+        const session = storage.getSession(DEFAULT_SESSION_ID);
+        session.statData = {};
+        session.state = createDefaultState();
+        session.latestOptions = [];
+        storage.saveSession(session);
+      }
+    }
     if (kind === 'preset') storage.deletePreset(id);
     if (kind === 'lorebook') storage.deleteLorebook(id);
     return {

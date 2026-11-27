@@ -6,7 +6,7 @@ import {
   splitIntoInjectChunks,
 } from '../core/prompt-assembler.js';
 import { applyMvuUpdates } from '../core/mvu-engine.js';
-import { StoryLogStore } from '../core/story-log.js';
+import { StoryLogStore, resolveStoryKey } from '../core/story-log.js';
 import { extractWaveOptions, readRecentTranscriptTexts } from './transcript-reader.js';
 import type { Lorebook } from '../core/types.js';
 
@@ -66,24 +66,26 @@ async function main(): Promise<void> {
     }
   }
 
-  // Deduplicate multiple model invocations within the SAME user turn (invocationNum > 1),
-  // without blocking the user from sending the same short message (e.g. "继续") on a new turn.
+  // Deduplicate multiple model invocations ONLY within the SAME user turn (explicit invocationNum > 1),
+  // so sending the same short message (e.g. "继续") across consecutive turns never drops pendingDirectorInput.
   const inputHash = hashText(lastUserInput);
   if (
     session.lastUserInputHash === inputHash &&
-    (payload.invocationNum === undefined || payload.invocationNum > 1)
+    typeof payload.invocationNum === 'number' &&
+    payload.invocationNum > 1
   ) {
     process.stdout.write(JSON.stringify({}));
     return;
   }
 
-  // Director Mode: main window acts as a lightweight dispatcher (tavern-director) and spawns a fresh
-  // tavern-rp subagent per turn. Never inject RP prose/lore into the main window; cache the user input
-  // with a 60s TTL so the spawned tavern-rp subagent's SessionStart unlocks and injects full context.
+  // Director Mode: main window acts as a lightweight dispatcher (story-director) and spawns a fresh
+  // story-writer subagent per turn. Never inject RP prose/lore into the main window; cache the user input
+  // with a 5-min TTL so the spawned story-writer subagent's SessionStart unlocks and injects full context.
   if (config.directorMode) {
     const shared = storage.getSession('default');
     shared.pendingDirectorInput = lastUserInput;
     shared.pendingDirectorInputAt = Date.now();
+    shared.lastUserInputForCommit = lastUserInput;
     storage.saveSession(shared);
     session.lastUserInputHash = inputHash;
     storage.saveSession(session);
@@ -93,7 +95,7 @@ async function main(): Promise<void> {
           {
             systemMessage: {
               systemMessage:
-                '[TavernInAGY Director] You are the dispatcher ONLY. Do NOT write story prose or call tavern_search_lorebook/tavern_commit_turn. Immediately call invoke_subagent(TypeName="tavern-rp", Role="RP Turn Writer") with the user message, wait for completion, then kill the subagent and reply with only the 1-line floor index.',
+                '[Story Director] You are the dispatcher ONLY. Do NOT write story prose or call story_search_lorebook/story_commit_turn. Immediately call invoke_subagent(TypeName="story-writer", Role="Story Turn Writer") with the user message, wait for completion, then kill the subagent and reply with only the 1-line floor index.',
             },
           },
         ],
@@ -156,7 +158,8 @@ async function main(): Promise<void> {
         activeRegexScripts,
       );
     } else {
-      const existingTurns = storyLog.readTurns(card.id);
+      const activeSlot = config.activeChatSlots?.[card.id] || 'default';
+      const existingTurns = storyLog.readTurns(resolveStoryKey(card.id, activeSlot));
       if (existingTurns.length > 0) {
         resumedStoryBlock = storyLog.formatForForkResume(
           existingTurns,
@@ -210,6 +213,9 @@ async function main(): Promise<void> {
   }
 
   storage.saveSession(session);
+  const sharedForCommit = storage.getSession('default');
+  sharedForCommit.lastUserInputForCommit = lastUserInput;
+  storage.saveSession(sharedForCommit);
 
   const combinedMessage = [sessionStartPrefix, bundle.systemMessage]
     .filter((s) => s && s.trim().length > 0)

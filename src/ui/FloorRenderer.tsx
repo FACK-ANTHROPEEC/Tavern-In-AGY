@@ -1,16 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { RegexScript } from '../core/types';
-import { applyRegexScripts, splitFloorSegments } from '../core/regex-engine';
+import { applyRegexScripts, foldUnknownCustomTags, splitFloorSegments } from '../core/regex-engine';
+import { buildSandboxedSrcDoc, parseSlashCommandAction } from './sandbox-shim';
 
 interface FloorRendererProps {
   narrative: string;
+  messageId: number;
   depth: number;
   regexScripts: RegexScript[];
   enableRegex: boolean;
+  unknownTagMode?: 'fold' | 'keep' | 'hide';
   charName: string;
   userName: string;
   statData: Record<string, unknown>;
+  storyTurns?: Array<{ index: number; userMessage?: string; narrative: string }>;
   onSendMessage: (text: string) => void;
+  onSetInput?: (text: string) => void;
+  onUpdateStatData?: (nextStatData: Record<string, unknown>) => void;
 }
 
 function renderProseText(text: string, keyPrefix: string) {
@@ -41,24 +47,35 @@ function renderProseText(text: string, keyPrefix: string) {
 }
 
 /**
- * Sandboxed inline iframe for preset/card HTML+JS regex widgets
- * (e.g. Wave options/plan cards, Meowssiah collapsible thinking, Xiajin action options).
- * Isolates CSS cleanly, auto-resizes height, and bridges `triggerSlash` to side-pane direct chat.
+ * Sandboxed inline iframe for preset/card HTML+CSS+JS regex widgets
+ * (e.g. preset option cards, styled CoT panels, MVU status bars).
+ * Strictly isolates CSS & JS per floor, auto-resizes height, bridges `triggerSlash` to side-pane direct chat,
+ * and syncs `replaceVariables` / `insertOrAssignVariables` back to MVU state.
  */
 function InlineRegexWidget({
   html,
   title,
+  messageId,
+  rawNarrative,
   charName,
   userName,
   statData,
+  storyTurns,
   onSendMessage,
+  onSetInput,
+  onUpdateStatData,
 }: {
   html: string;
   title?: string;
+  messageId: number;
+  rawNarrative: string;
   charName: string;
   userName: string;
   statData: Record<string, unknown>;
+  storyTurns?: Array<{ index: number; userMessage?: string; narrative: string }>;
   onSendMessage: (text: string) => void;
+  onSetInput?: (text: string) => void;
+  onUpdateStatData?: (nextStatData: Record<string, unknown>) => void;
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [height, setHeight] = useState<number>(120);
@@ -69,67 +86,56 @@ function InlineRegexWidget({
       const msg = evt.data;
       if (!msg || typeof msg !== 'object' || msg.widgetId !== widgetId) return;
       if (msg.type === 'tavern:resize' && typeof msg.height === 'number') {
-        setHeight(Math.max(48, Math.min(720, Math.ceil(msg.height) + 8)));
+        setHeight(Math.max(40, Math.min(1600, Math.ceil(msg.height) + 8)));
       } else if (msg.type === 'tavern:slash' && typeof msg.cmd === 'string') {
-        const cleaned = msg.cmd.replace(/^\/send\s+/i, '').trim();
-        if (cleaned) onSendMessage(cleaned);
+        const parsed = parseSlashCommandAction(msg.cmd);
+        if (parsed?.action === 'setInput') {
+          onSetInput?.(parsed.text);
+        } else if (parsed?.action === 'send') {
+          onSendMessage(parsed.text);
+        }
+      } else if (msg.type === 'tavern:updateStat' && msg.statData && typeof msg.statData === 'object') {
+        onUpdateStatData?.(msg.statData as Record<string, unknown>);
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [widgetId, onSendMessage]);
+  }, [widgetId, onSendMessage, onSetInput, onUpdateStatData]);
 
-  const srcDoc = useMemo(() => {
-    const bridgeScript = `<script>
-(function(){
-  const WID = ${JSON.stringify(widgetId)};
-  const STAT = ${JSON.stringify(statData)};
-  const CHAR = ${JSON.stringify(charName)};
-  const USER = ${JSON.stringify(userName)};
-  const triggerSlash = function(cmd){
-    try { window.parent.postMessage({ widgetId: WID, type: 'tavern:slash', cmd: String(cmd || '') }, '*'); } catch(e){}
-  };
-  const getVariables = function(){ return Object.assign({ stat_data: STAT }, STAT); };
-  const eventOn = function(){};
-  const getChatMessages = function(){ return []; };
-  window.triggerSlash = triggerSlash;
-  window.getVariables = getVariables;
-  window.eventOn = eventOn;
-  window.getChatMessages = getChatMessages;
-  window.TavernHelper = { triggerSlash, getVariables, eventOn, getChatMessages };
-  window.SillyTavern = { getContext: function(){ return { name1: USER, name2: CHAR, chatMetadata: { variables: getVariables() } }; } };
-  function postH(){
+  // Push live stat updates into the mounted iframe without rebuilding srcDoc
+  useEffect(() => {
     try {
-      const h = Math.max(document.body ? document.body.scrollHeight : 0, document.documentElement ? document.documentElement.scrollHeight : 0);
-      window.parent.postMessage({ widgetId: WID, type: 'tavern:resize', height: h }, '*');
-    } catch(e){}
-  }
-  window.addEventListener('load', function(){ postH(); setTimeout(postH, 150); setTimeout(postH, 500); });
-  if (typeof ResizeObserver !== 'undefined') {
-    window.addEventListener('DOMContentLoaded', function(){
-      if (document.body) new ResizeObserver(postH).observe(document.body);
-      postH();
-    });
-  }
-})();
-</script>`;
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: 'tavern:statSync', statData },
+        '*',
+      );
+    } catch {
+      // ignore if iframe not yet ready
+    }
+  }, [statData]);
 
-    const baseStyle = `<style>html,body{margin:0;padding:4px;background:transparent;color:#e5d9c3;font-family:"Noto Serif SC","Source Han Serif SC",serif;}</style>`;
-    if (/<head\b[^>]*>/i.test(html)) {
-      return html.replace(/<head\b[^>]*>/i, (m) => `${m}${baseStyle}${bridgeScript}`);
-    }
-    if (/<html\b[^>]*>/i.test(html)) {
-      return html.replace(/<html\b[^>]*>/i, (m) => `${m}<head>${baseStyle}${bridgeScript}</head>`);
-    }
-    return `<!doctype html><html><head><meta charset="utf-8" />${baseStyle}${bridgeScript}</head><body>${html}</body></html>`;
-  }, [html, widgetId, statData, charName, userName]);
+  const srcDoc = useMemo(
+    () =>
+      buildSandboxedSrcDoc(html, {
+        widgetId,
+        charName,
+        userName,
+        statData,
+        currentMessageId: messageId,
+        currentNarrative: rawNarrative,
+        storyTurns,
+      }),
+    // Intentionally keep statData out of srcDoc deps so live updates flow via postMessage without flickering
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [html, widgetId, charName, userName, messageId, rawNarrative],
+  );
 
   return (
     <div className="inline-widget-wrap">
       {title && <div className="inline-widget-label">{title}</div>}
       <iframe
         ref={iframeRef}
-        title={title || 'Preset Widget'}
+        title={title || 'Preset / Card Widget'}
         className="inline-widget-frame"
         sandbox="allow-scripts"
         srcDoc={srcDoc}
@@ -139,76 +145,31 @@ function InlineRegexWidget({
   );
 }
 
-function escapeHtmlText(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-const NATIVE_COT_TAGS: Array<{ tag: string; label: string }> = [
-  { tag: 'wave_plan', label: '📋 创作规划（Wave Plan）' },
-  { tag: 'think_nya', label: '💭 思维链（Think）' },
-  { tag: 'report_nya', label: '📋 思考报告' },
-  { tag: 'thinking', label: '💭 思维链（Thinking）' },
-  { tag: 'think', label: '💭 思维链（Think）' },
-  { tag: 'thought', label: '💭 思考' },
-  { tag: 'wave_summary', label: '📝 本楼记事' },
-  { tag: 'wave_review', label: '🔍 成稿回看' },
-  { tag: 'wave_comment', label: '💬 浪潮插话' },
-  { tag: 'background', label: '📜 背景剧情' },
-];
-
-/**
- * Converts standard preset CoT / plan / summary tags directly into zero-script native
- * `<details>` accordions so they never fail inside nested MCP App CSP sandboxes.
- */
-function preprocessNativeTags(raw: string): string {
-  let out = raw;
-  // Unwrap <content>...</content> cleanly
-  out = out.replace(/<content>\s*([\s\S]*?)\s*<\/content>/gi, '$1');
-  // Beautify <wave_mind>...</wave_mind> as italic inner thought
-  out = out.replace(/<wave_mind>\s*([\s\S]*?)\s*<\/wave_mind>/gi, (_m, inner: string) => {
-    return `\n> *${inner.trim()}*\n`;
-  });
-  // Remove <wave_options> / <options> raw block if clickable options strip already handles it,
-  // or fold it cleanly into a native details card
-  out = out.replace(/<(?:wave_options|options)>\s*([\s\S]*?)\s*<\/(?:wave_options|options)>/gi, (_m, inner: string) => {
-    const safe = escapeHtmlText(inner.trim()).replace(/\n/g, '<br/>');
-    return `\n<details><summary>🧭 备选走法</summary><div class="cot-body">${safe}</div></details>\n`;
-  });
-  for (const { tag, label } of NATIVE_COT_TAGS) {
-    const re = new RegExp(`<${tag}~?>\\s*([\\s\\S]*?)\\s*<\\/${tag}~?>`, 'gi');
-    out = out.replace(re, (_m, inner: string) => {
-      const safe = escapeHtmlText(inner.trim()).replace(/\n/g, '<br/>');
-      return `\n<details><summary>${label}</summary><div class="cot-body">${safe}</div></details>\n`;
-    });
-  }
-  return out;
-}
-
 export function FloorRenderer({
   narrative,
+  messageId,
   depth,
   regexScripts,
   enableRegex,
+  unknownTagMode = 'fold',
   charName,
   userName,
   statData,
+  storyTurns,
   onSendMessage,
+  onSetInput,
+  onUpdateStatData,
 }: FloorRendererProps) {
   const segments = useMemo(() => {
     if (!enableRegex) {
       return [{ kind: 'text' as const, content: narrative }];
     }
 
-    // 1. Convert standard CoT / plan / summary tags to zero-script native Warm Ink accordions first
-    const withNativeFolds = preprocessNativeTags(narrative);
-
-    // 2. Run preset & card display regex scripts (e.g. prose cleanup, punctuation, custom HTML blocks)
-    const processed =
+    // 1. Run preset & card display regex scripts FIRST (strict SillyTavern order)
+    //    so every preset's own option cards, CoT panels, and card status bars render faithfully.
+    const afterRegex =
       regexScripts.length > 0
-        ? applyRegexScripts(withNativeFolds, regexScripts, {
+        ? applyRegexScripts(narrative, regexScripts, {
             placement: 2,
             target: 'display',
             depth,
@@ -219,10 +180,16 @@ export function FloorRenderer({
               statData,
             },
           })
-        : withNativeFolds;
+        : narrative;
 
-    return splitFloorSegments(processed);
-  }, [narrative, depth, regexScripts, enableRegex, charName, userName, statData]);
+    // 2. Generic post-regex fallback: unwrap prose containers (<content>/<narrative>),
+    //    clean unconsumed empty placeholders (<StatusPlaceHolderImpl/>), and handle ANY
+    //    unseen custom XML tag not matched by preset/card regexes according to unknownTagMode.
+    const afterGenericFallback = foldUnknownCustomTags(afterRegex, unknownTagMode);
+
+    // 3. Deterministic 3-way split (text / static html / CSS+JS sandboxed widget)
+    return splitFloorSegments(afterGenericFallback);
+  }, [narrative, depth, regexScripts, enableRegex, unknownTagMode, charName, userName, statData]);
 
   return (
     <div className="floor-segments">
@@ -244,10 +211,15 @@ export function FloorRenderer({
             key={`wid-${idx}`}
             html={seg.html}
             title={seg.title}
+            messageId={messageId}
+            rawNarrative={narrative}
             charName={charName}
             userName={userName}
             statData={statData}
+            storyTurns={storyTurns}
             onSendMessage={onSendMessage}
+            onSetInput={onSetInput}
+            onUpdateStatData={onUpdateStatData}
           />
         );
       })}

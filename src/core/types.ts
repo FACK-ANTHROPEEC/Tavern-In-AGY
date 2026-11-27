@@ -156,6 +156,8 @@ export interface SessionRuntime {
   /** Latest user input cached by PreInvocation in directorMode for the spawned subagent's SessionStart lorebook scan */
   pendingDirectorInput?: string;
   pendingDirectorInputAt?: number;
+  /** Fallback user message captured by PreInvocation in case story_commit_turn omits userMessage */
+  lastUserInputForCommit?: string;
 }
 
 export interface SessionSnapshot {
@@ -167,6 +169,14 @@ export interface SessionSnapshot {
   variables: Record<string, string>;
   recentMessages: string[];
   createdAt: string;
+}
+
+export interface ChatSlotSummary {
+  slotId: string;
+  storyKey: string;
+  label: string;
+  turnCount: number;
+  updatedAt: string;
 }
 
 export interface TavernConfig {
@@ -184,6 +194,23 @@ export interface TavernConfig {
   statelessPerTurn?: boolean;
   /** When true (used with tavern-director agent), main window PreInvocation skips heavy injection and relays user input to spawned tavern-rp subagents */
   directorMode?: boolean;
+  /** UI visual scale percentage (80 - 130, default 100) */
+  uiScale?: number;
+  /** Narrative prose font size in px (12 - 22, default 14) */
+  proseFontSize?: number;
+  /** Narrative prose line height (1.4 - 2.2, default 1.7) */
+  proseLineHeight?: number;
+  /** Max reading width in px (0 = full width, e.g. 720 / 860 / 1000) */
+  maxReadingWidth?: number;
+  /** Persistent toggle for ST display regex beautification */
+  enableRegexBeautify?: boolean;
+  /** Fallback handling ONLY for leftover custom XML tags not consumed by any preset/card regex */
+  unknownTagMode?: 'fold' | 'keep' | 'hide';
+  /** SillyTavern-style Author's Note injected near the end of story history */
+  authorsNote?: string;
+  authorsNoteEnabled?: boolean;
+  /** Per-card active multi-playthrough chat slot id (`cardId -> slotId`, default `'default'`) */
+  activeChatSlots?: Record<string, string>;
 }
 
 export function createDefaultState(): LiveCharacterState {
@@ -209,11 +236,20 @@ export function createDefaultConfig(): TavernConfig {
     activeCardId: null,
     activePresetId: null,
     activeLorebookIds: [],
-    cooldownTurns: 12,
+    cooldownTurns: 3,
     stateRefreshInterval: 3,
     postHistoryRefreshInterval: 0,
     enablePostHistoryInjection: true,
     statelessPerTurn: false,
-    directorMode: false,
+    directorMode: true,
+    uiScale: 100,
+    proseFontSize: 14,
+    proseLineHeight: 1.7,
+    maxReadingWidth: 0,
+    enableRegexBeautify: true,
+    unknownTagMode: 'fold',
+    authorsNote: '',
+    authorsNoteEnabled: false,
+    activeChatSlots: {},
   };
 }

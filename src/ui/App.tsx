@@ -101,6 +101,14 @@ interface StoryTurnItem {
   createdAt: string;
 }
 
+interface ChatSlotSummary {
+  slotId: string;
+  storyKey: string;
+  label: string;
+  turnCount: number;
+  updatedAt: string;
+}
+
 interface TavernConfig {
   enabled: boolean;
   userName: string;
@@ -113,6 +121,14 @@ interface TavernConfig {
   enablePostHistoryInjection: boolean;
   statelessPerTurn?: boolean;
   directorMode?: boolean;
+  uiScale?: number;
+  proseFontSize?: number;
+  proseLineHeight?: number;
+  maxReadingWidth?: number;
+  enableRegexBeautify?: boolean;
+  unknownTagMode?: 'fold' | 'keep' | 'hide';
+  authorsNote?: string;
+  authorsNoteEnabled?: boolean;
 }
 
 interface BootstrapData {
@@ -124,6 +140,8 @@ interface BootstrapData {
   statData?: Record<string, unknown>;
   latestOptions: WaveOption[];
   storyTurns: StoryTurnItem[];
+  chatSlots?: ChatSlotSummary[];
+  activeChatSlot?: string;
   activeDisplayRegexScripts?: RegexScript[];
   dataDir: string;
 }
@@ -153,15 +171,19 @@ export function AppView() {
   const [editingDraft, setEditingDraft] = useState<string>('');
   const [composerText, setComposerText] = useState<string>('');
   const [pendingSend, setPendingSend] = useState<string | null>(null);
-  const pendingBaseTurnCountRef = useRef<number>(0);
-  const [showOptions, setShowOptions] = useState<boolean>(true);
+  const pendingBaseLastTurnIdRef = useRef<string | null>(null);
   const [cardFrontend, setCardFrontend] = useState<CardFrontendPayload | null>(null);
-  const [enableRegexBeautify, setEnableRegexBeautify] = useState<boolean>(true);
   const [showPresetRegexList, setShowPresetRegexList] = useState<boolean>(false);
   const [showEmbeddedLore, setShowEmbeddedLore] = useState<boolean>(true);
   const [editingPromptId, setEditingPromptId] = useState<string | null>(null);
   const [editingPromptContent, setEditingPromptContent] = useState<string>('');
   const [editingPromptRole, setEditingPromptRole] = useState<'system' | 'user' | 'assistant'>('system');
+  const [draftUiScale, setDraftUiScale] = useState<number | null>(null);
+  const [draftFontSize, setDraftFontSize] = useState<number | null>(null);
+  const [draftLineHeight, setDraftLineHeight] = useState<number | null>(null);
+  const [authorsNoteDraft, setAuthorsNoteDraft] = useState<string>('');
+  const [userNameDraft, setUserNameDraft] = useState<string>('');
+  const [userPersonaDraft, setUserPersonaDraft] = useState<string>('');
 
   useEffect(() => {
     const app = new App({ name: 'TavernInAGY', version: '0.7.0' }, {});
@@ -236,21 +258,29 @@ export function AppView() {
       .then(async () => {
         const caps = app.getHostCapabilities();
         setCanMessage(Boolean(caps && 'message' in caps));
-        await callTool('tavern_app_bootstrap', {});
+        await callTool('story_app_bootstrap', {});
       })
       .catch((err) => {
         setStatusMsg(`连接失败: ${String(err)}`);
       });
   }, []);
 
+  // Sync controlled text drafts whenever persisted config updates
+  useEffect(() => {
+    if (!data?.config) return;
+    setAuthorsNoteDraft(data.config.authorsNote ?? '');
+    setUserNameDraft(data.config.userName ?? '');
+    setUserPersonaDraft(data.config.userPersona ?? '');
+  }, [data?.config.authorsNote, data?.config.userName, data?.config.userPersona]);
+
   // Auto-scroll to bottom when new turns arrive or user sends a message
   useEffect(() => {
     if (tab === 'chat') {
       chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [data?.storyTurns?.length, pendingSend, tab]);
+  }, [data?.storyTurns?.[data.storyTurns.length - 1]?.turnId, pendingSend, tab]);
 
-  // Lightweight auto-poll ONLY while waiting for a reply so the user never has to click Refresh manually
+  // Lightweight auto-poll ONLY while waiting for a reply (tracks latest turnId so >50 turns never stalls)
   useEffect(() => {
     if (!pendingSend) return;
     let cancelled = false;
@@ -258,22 +288,24 @@ export function AppView() {
     const timer = window.setInterval(async () => {
       if (cancelled) return;
       ticks += 1;
-      if (ticks > 60) {
-        // Stop polling after ~2.5 minutes
+      if (ticks > 90) {
+        // Stop polling after ~3.75 minutes
         window.clearInterval(timer);
         return;
       }
       const app = appRef.current;
       if (!app) return;
       try {
-        const res = await app.callServerTool({ name: 'tavern_app_bootstrap', arguments: {} });
+        const res = await app.callServerTool({ name: 'story_app_bootstrap', arguments: {} });
         const sc = res?.structuredContent as BootstrapData | undefined;
         if (!cancelled && sc && sc.config) {
-          const newCount = sc.storyTurns?.length ?? 0;
-          if (newCount > pendingBaseTurnCountRef.current) {
+          const turns = sc.storyTurns ?? [];
+          const latestTurn = turns[turns.length - 1];
+          const latestId = latestTurn?.turnId ?? null;
+          if (latestId && latestId !== pendingBaseLastTurnIdRef.current) {
             setData(sc);
             setPendingSend(null);
-            setStatusMsg(`已自动同步第 #${newCount} 楼正文`);
+            setStatusMsg(`已自动同步第 #${latestTurn.index} 楼正文`);
             window.clearInterval(timer);
           }
         }
@@ -300,7 +332,7 @@ export function AppView() {
       const sc = res?.structuredContent as BootstrapData | undefined;
       if (sc && sc.config) {
         setData(sc);
-        if (name === 'tavern_app_bootstrap') {
+        if (name === 'story_app_bootstrap') {
           setPendingSend(null);
         }
       }
@@ -322,11 +354,12 @@ export function AppView() {
     const useDirector = Boolean(data?.config.directorMode);
     const useStateless = !useDirector && Boolean(data?.config.statelessPerTurn);
     setComposerText('');
-    pendingBaseTurnCountRef.current = data?.storyTurns?.length ?? 0;
+    const currentTurns = data?.storyTurns ?? [];
+    pendingBaseLastTurnIdRef.current = currentTurns[currentTurns.length - 1]?.turnId ?? null;
     setPendingSend(text);
     setStatusMsg(
       useDirector
-        ? '已交由导演派发全新 tavern-rp 子智能体落笔（写完自动销毁并同步）...'
+        ? '已交由导演派发全新 story-writer 子智能体落笔（写完自动销毁并同步）...'
         : useStateless
           ? '已按无状态单轮模式拉起全新上下文，等待角色落笔（完成后自动同步）...'
           : '已发送，等待角色落笔回应（完成后将自动同步）...',
@@ -355,7 +388,7 @@ export function AppView() {
     setStatusMsg(`正在导入角色卡 ${file.name}...`);
     const buf = await file.arrayBuffer();
     const isPng = file.name.toLowerCase().endsWith('.png');
-    await callTool('tavern_app_import_card', {
+    await callTool('story_app_import_card', {
       filename: file.name,
       contentBase64: arrayBufferToBase64(buf),
       isPng,
@@ -370,7 +403,7 @@ export function AppView() {
     if (!file) return;
     setStatusMsg(`正在解析社区预设 ${file.name}...`);
     const jsonText = await file.text();
-    await callTool('tavern_app_import_preset', {
+    await callTool('story_app_import_preset', {
       filename: file.name,
       jsonText,
       setActive: true,
@@ -384,7 +417,7 @@ export function AppView() {
     if (!file) return;
     setStatusMsg(`正在导入世界书 ${file.name}...`);
     const jsonText = await file.text();
-    await callTool('tavern_app_import_lorebook', {
+    await callTool('story_app_import_lorebook', {
       filename: file.name,
       jsonText,
       activate: true,
@@ -394,7 +427,7 @@ export function AppView() {
   }
 
   async function handleForkBranch() {
-    await callTool('tavern_app_prepare_fork', {});
+    await callTool('story_app_prepare_fork', {});
     const app = appRef.current;
     if (app && canMessage) {
       try {
@@ -466,8 +499,23 @@ export function AppView() {
       data.sessionState.affection !== 0,
   );
 
+  const enableRegexBeautify = data.config.enableRegexBeautify !== false;
+  const unknownTagMode = data.config.unknownTagMode ?? 'fold';
+  const uiScale = Math.max(80, Math.min(130, draftUiScale ?? data.config.uiScale ?? 100));
+  const proseFontSize = Math.max(12, Math.min(22, draftFontSize ?? data.config.proseFontSize ?? 14));
+  const proseLineHeight = Math.max(1.4, Math.min(2.2, draftLineHeight ?? data.config.proseLineHeight ?? 1.7));
+  const maxReadingWidth = data.config.maxReadingWidth ?? 0;
+
+  const shellStyle = {
+    zoom: uiScale / 100,
+    height: `${(10000 / uiScale).toFixed(2)}vh`,
+    '--prose-font-size': `${proseFontSize}px`,
+    '--prose-line-height': String(proseLineHeight),
+    '--reading-max-width': maxReadingWidth > 0 ? `${maxReadingWidth}px` : '100%',
+  } as React.CSSProperties;
+
   return (
-    <div className="app-shell">
+    <div className="app-shell" style={shellStyle}>
       <div className="header">
         <div className="header-title">
           {activeCard?.avatarDataUrl ? (
@@ -485,7 +533,7 @@ export function AppView() {
         <div className="row" style={{ gap: 4 }}>
           <button
             className="btn btn-xs"
-            onClick={() => callTool('tavern_app_bootstrap', {})}
+            onClick={() => callTool('story_app_bootstrap', {})}
             title="手动同步最新楼层与状态"
           >
             刷新
@@ -493,7 +541,7 @@ export function AppView() {
           <button
             className={`btn btn-xs ${data.config.enabled ? '' : 'btn-primary'}`}
             onClick={() =>
-              callTool('tavern_app_update_config', { enabled: !data.config.enabled })
+              callTool('story_app_update_config', { enabled: !data.config.enabled })
             }
           >
             {data.config.enabled ? '暂停' : '启用'}
@@ -568,13 +616,23 @@ export function AppView() {
                   narrative={activeCard.firstMessage
                     .replace(/\{\{char\}\}/gi, activeCard.name)
                     .replace(/\{\{user\}\}/gi, data.config.userName || 'User')}
+                  messageId={0}
                   depth={data.storyTurns?.length ?? 0}
                   regexScripts={data.activeDisplayRegexScripts ?? []}
                   enableRegex={enableRegexBeautify}
+                  unknownTagMode={unknownTagMode}
                   charName={activeCard.name}
                   userName={data.config.userName || 'User'}
                   statData={data.statData ?? {}}
+                  storyTurns={data.storyTurns ?? []}
                   onSendMessage={sendTextToChat}
+                  onSetInput={(txt) => {
+                    setComposerText(txt);
+                    setStatusMsg('已将选项填入下方输入框');
+                  }}
+                  onUpdateStatData={(nextStat) =>
+                    callTool('story_app_set_stat_data', { statData: nextStat })
+                  }
                 />
               </div>
             )}
@@ -611,7 +669,7 @@ export function AppView() {
                           <button
                             className="btn btn-xs btn-primary"
                             onClick={async () => {
-                              await callTool('tavern_app_edit_turn', {
+                              await callTool('story_app_edit_turn', {
                                 turnId: t.turnId,
                                 narrative: editingDraft,
                               });
@@ -625,7 +683,7 @@ export function AppView() {
                         <button
                           className="btn btn-xs"
                           onClick={async () => {
-                            await callTool('tavern_app_rollback_turn', {
+                            await callTool('story_app_rollback_turn', {
                               turnId: t.turnId,
                               inclusive: true,
                             });
@@ -637,7 +695,7 @@ export function AppView() {
                         <button
                           className="btn btn-xs btn-danger"
                           onClick={async () => {
-                            await callTool('tavern_app_rollback_turn', {
+                            await callTool('story_app_rollback_turn', {
                               turnId: t.turnId,
                               inclusive: false,
                             });
@@ -658,13 +716,23 @@ export function AppView() {
                     ) : (
                       <FloorRenderer
                         narrative={t.narrative}
+                        messageId={t.index}
                         depth={depth}
                         regexScripts={data.activeDisplayRegexScripts ?? []}
                         enableRegex={enableRegexBeautify}
+                        unknownTagMode={unknownTagMode}
                         charName={activeCard?.name ?? '角色'}
                         userName={data.config.userName || 'User'}
                         statData={data.statData ?? {}}
+                        storyTurns={data.storyTurns ?? []}
                         onSendMessage={sendTextToChat}
+                        onSetInput={(txt) => {
+                          setComposerText(txt);
+                          setStatusMsg('已将选项填入下方输入框');
+                        }}
+                        onUpdateStatData={(nextStat) =>
+                          callTool('story_app_set_stat_data', { statData: nextStat })
+                        }
                       />
                     )}
                   </div>
@@ -688,42 +756,13 @@ export function AppView() {
           </div>
 
           <div className="composer-dock">
-            {data.latestOptions.length > 0 && (
-              <div>
-                <div className="row" style={{ marginBottom: 4 }}>
-                  <span className="muted">快捷走法选项（点击即发）</span>
-                  <button
-                    className="btn btn-xs"
-                    onClick={() => setShowOptions((v) => !v)}
-                  >
-                    {showOptions ? '收起' : `展开 (${data.latestOptions.length})`}
-                  </button>
-                </div>
-                {showOptions && (
-                  <div className="options-strip">
-                    {data.latestOptions.map((opt, idx) => (
-                      <button
-                        key={idx}
-                        className="option-btn"
-                        disabled={!canMessage}
-                        onClick={() => sendTextToChat(`${opt.label}：${opt.text}`)}
-                      >
-                        <div><strong>{opt.label}</strong></div>
-                        <div className="muted">{opt.text}</div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
             <div className="composer-row">
               <textarea
                 className="composer-input"
                 placeholder={
                   canMessage
                     ? data.config.directorMode
-                      ? '导演模式（请确保左侧已选 tavern-director）：每轮自动派发干净子智能体落笔…'
+                      ? '导演模式（左侧请选 story-director）：每轮自动派发干净子体落笔…（Enter 发送）'
                       : data.config.statelessPerTurn
                         ? '无状态单轮模式：每句自动新开干净上下文全量重拼…（Enter 发送）'
                         : '在此直接输入你的行动或对话…（Enter 发送，Shift+Enter 换行）'
@@ -748,38 +787,107 @@ export function AppView() {
               </button>
             </div>
 
-            <div className="row">
-              <span className="muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {statusMsg}
-              </span>
-              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+            <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
+                {activeCard && (data.chatSlots?.length ?? 0) > 0 && (
+                  <select
+                    className="input"
+                    style={{ padding: '2px 6px', fontSize: 11, height: 24, width: 'auto', minWidth: 96 }}
+                    value={data.activeChatSlot || 'default'}
+                    onChange={(e) =>
+                      callTool('story_app_switch_chat_slot', { slotId: e.target.value }).then(() =>
+                        setStatusMsg('已切换至选定存档'),
+                      )
+                    }
+                    title="切换该角色卡的历史聊天存档（旧记录全部保留）"
+                  >
+                    {(data.chatSlots ?? []).map((slot) => (
+                      <option key={slot.slotId} value={slot.slotId}>
+                        {slot.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {activeCard && (
+                  <button
+                    className="btn btn-xs"
+                    style={{ whiteSpace: 'nowrap' }}
+                    onClick={async () => {
+                      await callTool('story_app_new_chat_slot', {});
+                      setStatusMsg('已开启新存档（旧记录完好保留，随时可在下拉栏切回）');
+                    }}
+                    title="保留旧聊天记录，新建一个干净存档并重置初始状态"
+                  >
+                    + 新存档
+                  </button>
+                )}
+                <button
+                  className="btn btn-xs"
+                  style={{ whiteSpace: 'nowrap' }}
+                  disabled={Boolean(pendingSend) || (data.storyTurns?.length ?? 0) === 0}
+                  onClick={async () => {
+                    const turns = data.storyTurns ?? [];
+                    const last = turns[turns.length - 1];
+                    if (!last) return;
+                    const promptToReplay = last.userMessage?.trim();
+                    await callTool('story_app_rollback_turn', {
+                      turnId: last.turnId,
+                      inclusive: false,
+                    });
+                    if (promptToReplay) {
+                      setComposerText(promptToReplay);
+                      setStatusMsg(`已撤回第 #${last.index} 楼并将原指令填回输入框，按 Enter 即可重发`);
+                    } else {
+                      setStatusMsg(`已撤回第 #${last.index} 楼，请在下方输入新指令`);
+                    }
+                  }}
+                  title="撤回最新一楼并将原指令填回输入框，方便微调后按 Enter 手动重发"
+                >
+                  ↻ 重Roll本楼
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, alignItems: 'center' }}>
                 <button
                   className={`btn btn-xs ${data.config.directorMode ? 'btn-primary' : ''}`}
+                  style={{ whiteSpace: 'nowrap' }}
                   onClick={() =>
-                    callTool('tavern_app_update_config', {
+                    callTool('story_app_update_config', {
                       directorMode: !data.config.directorMode,
                       ...(!data.config.directorMode ? { statelessPerTurn: false } : {}),
                     })
                   }
-                  title="单窗口导演模式（需在左侧选择 tavern-director）：每轮派发全新 tavern-rp 子智能体落笔后立即销毁，零多会话刷屏"
+                  title="单窗口导演模式（需在左侧选择 story-director）"
                 >
-                  {data.config.directorMode ? '导演子体：开' : '导演子体：关'}
+                  {data.config.directorMode ? '导演：开' : '导演：关'}
                 </button>
                 <button
                   className="btn btn-xs"
-                  onClick={() => setEnableRegexBeautify((v) => !v)}
-                  title="切换预设/角色卡正则美化与原始正文"
+                  style={{ whiteSpace: 'nowrap' }}
+                  onClick={() =>
+                    callTool('story_app_update_config', {
+                      enableRegexBeautify: !enableRegexBeautify,
+                    })
+                  }
+                  title="切换预设/角色卡正则美化与原始正文（已持久化）"
                 >
-                  {enableRegexBeautify ? '正则美化：开' : '正则美化：关'}
+                  {enableRegexBeautify ? '正则：开' : '正则：关'}
                 </button>
-                <button
-                  className="btn btn-xs"
-                  onClick={handleForkBranch}
-                  title="编辑或删楼后，拉起新分支无缝续写"
-                >
-                  ✨ 分支续写
-                </button>
+                {!data.config.directorMode && (
+                  <button
+                    className="btn btn-xs"
+                    style={{ whiteSpace: 'nowrap' }}
+                    onClick={handleForkBranch}
+                    title="编辑或删楼后，拉起新分支无缝续写"
+                  >
+                    ✨ 分支续写
+                  </button>
+                )}
               </div>
+            </div>
+
+            <div className="muted" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {statusMsg}
             </div>
           </div>
         </>
@@ -797,10 +905,10 @@ export function AppView() {
                 </label>
               </div>
               <div className="muted">
-                💡 在主聊天框输入 <code>/agents</code> 切换 <strong>tavern-rp</strong> 进入纯净 RP 模式，在此一键切卡即刻生效。
+                💡 在主聊天框输入 <code>/agents</code> 切换 <strong>story-writer</strong> 进入纯净 RP 模式，在此一键切卡即刻生效。
               </div>
               {data.cards.length === 0 && (
-                <div className="muted">暂未导入角色卡，点击右上角导入原版 ST PNG/JSON 角色卡。</div>
+                <div className="muted">暂未导入角色卡，点击右上角导入标准 PNG/JSON 角色卡。</div>
               )}
               {data.cards.map((card) => {
                 const isActive = data.config.activeCardId === card.id;
@@ -820,7 +928,7 @@ export function AppView() {
                         <button
                           className={`btn ${isActive ? 'btn-primary' : ''}`}
                           onClick={() =>
-                            callTool('tavern_app_update_config', {
+                            callTool('story_app_update_config', {
                               activeCardId: isActive ? null : card.id,
                             })
                           }
@@ -829,7 +937,7 @@ export function AppView() {
                         </button>
                         <button
                           className="btn btn-danger"
-                          onClick={() => callTool('tavern_app_delete_asset', { kind: 'card', id: card.id })}
+                          onClick={() => callTool('story_app_delete_asset', { kind: 'card', id: card.id })}
                         >
                           删
                         </button>
@@ -857,7 +965,7 @@ export function AppView() {
                     className="input"
                     value={data.config.activePresetId ?? ''}
                     onChange={(e) =>
-                      callTool('tavern_app_update_config', {
+                      callTool('story_app_update_config', {
                         activePresetId: e.target.value || null,
                       })
                     }
@@ -872,7 +980,7 @@ export function AppView() {
                   {activePreset && (
                     <button
                       className="btn btn-danger"
-                      onClick={() => callTool('tavern_app_delete_asset', { kind: 'preset', id: activePreset.id })}
+                      onClick={() => callTool('story_app_delete_asset', { kind: 'preset', id: activePreset.id })}
                     >
                       删
                     </button>
@@ -929,7 +1037,7 @@ export function AppView() {
                                       type="checkbox"
                                       checked={!r.disabled}
                                       onChange={(e) =>
-                                        callTool('tavern_app_toggle_preset_regex', {
+                                        callTool('story_app_toggle_preset_regex', {
                                           presetId: activePreset.id,
                                           index: r.index,
                                           disabled: !e.target.checked,
@@ -992,7 +1100,7 @@ export function AppView() {
                                         const app = appRef.current;
                                         if (!app) return;
                                         const res = await app.callServerTool({
-                                          name: 'tavern_app_get_preset_prompt',
+                                          name: 'story_app_get_preset_prompt',
                                           arguments: {
                                             presetId: activePreset.id,
                                             identifier: item.identifier,
@@ -1021,7 +1129,7 @@ export function AppView() {
                                           type="checkbox"
                                           checked={item.enabled}
                                           onChange={(e) =>
-                                            callTool('tavern_app_toggle_preset_prompt', {
+                                            callTool('story_app_toggle_preset_prompt', {
                                               presetId: activePreset.id,
                                               identifier: item.identifier,
                                               enabled: e.target.checked,
@@ -1068,7 +1176,7 @@ export function AppView() {
                                         <button
                                           className="btn btn-xs btn-primary"
                                           onClick={async () => {
-                                            await callTool('tavern_app_edit_preset_prompt', {
+                                            await callTool('story_app_edit_preset_prompt', {
                                               presetId: activePreset.id,
                                               identifier: item.identifier,
                                               content: editingPromptContent,
@@ -1115,7 +1223,7 @@ export function AppView() {
                   max={100}
                   value={data.config.cooldownTurns}
                   onChange={(e) =>
-                    callTool('tavern_app_update_config', {
+                    callTool('story_app_update_config', {
                       cooldownTurns: Math.max(0, Number(e.target.value) || 0),
                     })
                   }
@@ -1160,7 +1268,7 @@ export function AppView() {
                                 type="checkbox"
                                 checked={entry.enabled}
                                 onChange={(e) =>
-                                  callTool('tavern_app_toggle_card_lore_entry', {
+                                  callTool('story_app_toggle_card_lore_entry', {
                                     cardId: activeCard.id,
                                     uid: entry.uid,
                                     enabled: e.target.checked,
@@ -1202,14 +1310,14 @@ export function AppView() {
                             const next = e.target.checked
                               ? [...data.config.activeLorebookIds, book.id]
                               : data.config.activeLorebookIds.filter((x) => x !== book.id);
-                            callTool('tavern_app_update_config', { activeLorebookIds: next });
+                            callTool('story_app_update_config', { activeLorebookIds: next });
                           }}
                         />
                         <span className="st-slider" />
                       </label>
                       <button
                         className="btn btn-danger"
-                        onClick={() => callTool('tavern_app_delete_asset', { kind: 'lorebook', id: book.id })}
+                        onClick={() => callTool('story_app_delete_asset', { kind: 'lorebook', id: book.id })}
                       >
                         删
                       </button>
@@ -1231,7 +1339,7 @@ export function AppView() {
                     storyTurns={data.storyTurns ?? []}
                     onSendSlashOrMessage={(txt) => sendTextToChat(txt)}
                     onUpdateStatData={(nextStat) =>
-                      callTool('tavern_app_set_stat_data', { statData: nextStat })
+                      callTool('story_app_set_stat_data', { statData: nextStat })
                     }
                   />
                 ) : (
@@ -1240,7 +1348,7 @@ export function AppView() {
                       <div>
                         <strong>✨ 检测到角色卡自带前端美化 / 助手脚本</strong>
                         <div className="muted">
-                          可在侧边栏通过 TavernHelper 垫片加载，完全不碰 AGY 主窗口。
+                          可在侧边栏通过 卡片脚本垫片加载，完全不碰 AGY 主窗口。
                         </div>
                       </div>
                       <button
@@ -1250,7 +1358,7 @@ export function AppView() {
                           if (!app) return;
                           setStatusMsg('正在加载角色卡前端资源...');
                           const res = await app.callServerTool({
-                            name: 'tavern_app_get_card_frontend',
+                            name: 'story_app_get_card_frontend',
                             arguments: { cardId: activeCard.id },
                           });
                           const sc = res?.structuredContent as CardFrontendPayload | undefined;
@@ -1286,22 +1394,161 @@ export function AppView() {
               </div>
 
               <div className="card-box">
-                <strong>上下文与省额度策略（AGY 缓存优化）</strong>
                 <div className="row">
-                  <div>
-                    <div>单窗口导演模式（推荐 · 配合左侧 <code>tavern-director</code>）</div>
-                    <div className="muted">
-                      主窗口零注入、不刷屏左侧列表；每轮自动派发全新 <code>tavern-rp</code> 子智能体全量重拼上下文落笔，写完立即销毁。
-                    </div>
-                  </div>
-                  <label className="st-switch" style={{ flexShrink: 0 }}>
+                  <strong>外观与页面尺寸</strong>
+                  <button
+                    className="btn btn-xs"
+                    onClick={() => {
+                      setDraftUiScale(null);
+                      setDraftFontSize(null);
+                      setDraftLineHeight(null);
+                      callTool('story_app_update_config', {
+                        uiScale: 100,
+                        proseFontSize: 14,
+                        proseLineHeight: 1.7,
+                        maxReadingWidth: 0,
+                      });
+                    }}
+                  >
+                    恢复默认
+                  </button>
+                </div>
+                <div className="row">
+                  <span className="muted">页面整体缩放：{uiScale}%</span>
+                  <input
+                    type="range"
+                    min={80}
+                    max={130}
+                    step={5}
+                    value={uiScale}
+                    onChange={(e) => setDraftUiScale(Number(e.target.value))}
+                    onPointerUp={() => {
+                      if (draftUiScale !== null) {
+                        const val = draftUiScale;
+                        setDraftUiScale(null);
+                        callTool('story_app_update_config', { uiScale: val });
+                      }
+                    }}
+                    onKeyUp={() => {
+                      if (draftUiScale !== null) {
+                        const val = draftUiScale;
+                        setDraftUiScale(null);
+                        callTool('story_app_update_config', { uiScale: val });
+                      }
+                    }}
+                  />
+                </div>
+                <div className="row">
+                  <span className="muted">正文字号：{proseFontSize}px</span>
+                  <input
+                    type="range"
+                    min={12}
+                    max={22}
+                    step={1}
+                    value={proseFontSize}
+                    onChange={(e) => setDraftFontSize(Number(e.target.value))}
+                    onPointerUp={() => {
+                      if (draftFontSize !== null) {
+                        const val = draftFontSize;
+                        setDraftFontSize(null);
+                        callTool('story_app_update_config', { proseFontSize: val });
+                      }
+                    }}
+                    onKeyUp={() => {
+                      if (draftFontSize !== null) {
+                        const val = draftFontSize;
+                        setDraftFontSize(null);
+                        callTool('story_app_update_config', { proseFontSize: val });
+                      }
+                    }}
+                  />
+                </div>
+                <div className="row">
+                  <span className="muted">正文行距：{proseLineHeight.toFixed(1)}</span>
+                  <input
+                    type="range"
+                    min={1.4}
+                    max={2.2}
+                    step={0.1}
+                    value={proseLineHeight}
+                    onChange={(e) => setDraftLineHeight(Number(Number(e.target.value).toFixed(1)))}
+                    onPointerUp={() => {
+                      if (draftLineHeight !== null) {
+                        const val = draftLineHeight;
+                        setDraftLineHeight(null);
+                        callTool('story_app_update_config', { proseLineHeight: val });
+                      }
+                    }}
+                    onKeyUp={() => {
+                      if (draftLineHeight !== null) {
+                        const val = draftLineHeight;
+                        setDraftLineHeight(null);
+                        callTool('story_app_update_config', { proseLineHeight: val });
+                      }
+                    }}
+                  />
+                </div>
+                <div className="row">
+                  <span className="muted">阅读版心宽度</span>
+                  <select
+                    className="input"
+                    style={{ width: 150 }}
+                    value={maxReadingWidth}
+                    onChange={(e) =>
+                      callTool('story_app_update_config', {
+                        maxReadingWidth: Number(e.target.value),
+                      })
+                    }
+                  >
+                    <option value={0}>自适应全宽</option>
+                    <option value={720}>书卷窄版 (720px)</option>
+                    <option value={860}>书卷标准 (860px)</option>
+                    <option value={1000}>书卷宽版 (1000px)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="card-box">
+                <div className="row">
+                  <strong>作者注释（Author&apos;s Note）</strong>
+                  <label className="st-switch">
                     <input
                       type="checkbox"
-                      checked={Boolean(data.config.directorMode)}
+                      checked={Boolean(data.config.authorsNoteEnabled)}
                       onChange={(e) =>
-                        callTool('tavern_app_update_config', {
-                          directorMode: e.target.checked,
-                          ...(e.target.checked ? { statelessPerTurn: false } : {}),
+                        callTool('story_app_update_config', {
+                          authorsNoteEnabled: e.target.checked,
+                        })
+                      }
+                    />
+                    <span className="st-slider" />
+                  </label>
+                </div>
+                <div className="muted">
+                  不改角色卡或预设原文，随时注入短期导演提醒/文风微调（自动置于历史楼层末尾，支持宏与 EJS）。
+                </div>
+                <textarea
+                  className="textarea"
+                  placeholder="例如：接下来几轮保持舒缓温馨的日常互动节奏，重点刻画细节与眼神交流..."
+                  value={authorsNoteDraft}
+                  onChange={(e) => setAuthorsNoteDraft(e.target.value)}
+                  onBlur={() =>
+                    callTool('story_app_update_config', { authorsNote: authorsNoteDraft })
+                  }
+                />
+              </div>
+
+              <div className="card-box">
+                <strong>剧情渲染与世界书设置</strong>
+                <div className="row">
+                  <span className="muted">启用预设/角色卡正则美化（持久化）</span>
+                  <label className="st-switch">
+                    <input
+                      type="checkbox"
+                      checked={enableRegexBeautify}
+                      onChange={(e) =>
+                        callTool('story_app_update_config', {
+                          enableRegexBeautify: e.target.checked,
                         })
                       }
                     />
@@ -1310,19 +1557,111 @@ export function AppView() {
                 </div>
                 <div className="row">
                   <div>
-                    <div>无状态单轮模式（每轮新开后台会话）</div>
+                    <div>漏网未知标签兜底</div>
                     <div className="muted">
-                      备选方案：每次发送拉起新后台对话（会新增左侧历史会话记录）。
+                      作者正则始终最先执行；仅当某自定义标签未被任何正则匹配时，按此策略兜底。
+                    </div>
+                  </div>
+                  <select
+                    className="input"
+                    style={{ width: 130, flexShrink: 0 }}
+                    value={unknownTagMode}
+                    onChange={(e) =>
+                      callTool('story_app_update_config', {
+                        unknownTagMode: e.target.value as 'fold' | 'keep' | 'hide',
+                      })
+                    }
+                  >
+                    <option value="fold">自动折叠（推荐）</option>
+                    <option value="keep">原样保留</option>
+                    <option value="hide">静默隐藏</option>
+                  </select>
+                </div>
+                <div className="row">
+                  <span className="muted">世界书触发冷却回合（0 = 每次命中均触发）</span>
+                  <input
+                    type="number"
+                    className="input"
+                    style={{ width: 72 }}
+                    min={0}
+                    max={50}
+                    value={data.config.cooldownTurns}
+                    onChange={(e) =>
+                      callTool('story_app_update_config', {
+                        cooldownTurns: Math.max(0, Number(e.target.value) || 0),
+                      })
+                    }
+                  />
+                </div>
+              </div>
+
+              {activeCard && (data.chatSlots?.length ?? 0) > 0 && (
+                <div className="card-box">
+                  <div className="row">
+                    <strong>多周目存档管理（{activeCard.name}）</strong>
+                    <button
+                      className="btn btn-xs btn-primary"
+                      onClick={async () => {
+                        await callTool('story_app_new_chat_slot', {});
+                        setStatusMsg('已开启新周目（旧周目记录完好保留）');
+                      }}
+                    >
+                      + 开启新周目
+                    </button>
+                  </div>
+                  {(data.chatSlots ?? []).map((slot) => {
+                    const isCurrent = (data.activeChatSlot || 'default') === slot.slotId;
+                    return (
+                      <div key={slot.slotId} className="row">
+                        <span className={isCurrent ? '' : 'muted'}>
+                          {isCurrent ? '● ' : ''}
+                          {slot.label}
+                        </span>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          {!isCurrent && (
+                            <button
+                              className="btn btn-xs"
+                              onClick={() =>
+                                callTool('story_app_switch_chat_slot', { slotId: slot.slotId })
+                              }
+                            >
+                              切换
+                            </button>
+                          )}
+                          {slot.slotId !== 'default' && (
+                            <button
+                              className="btn btn-xs btn-danger"
+                              onClick={() =>
+                                callTool('story_app_delete_chat_slot', { slotId: slot.slotId })
+                              }
+                            >
+                              删档
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="card-box">
+                <strong>上下文与省额度策略（AGY 缓存优化）</strong>
+                <div className="row">
+                  <div>
+                    <div>单窗口导演模式（推荐 · 配合左侧 <code>story-director</code>）</div>
+                    <div className="muted">
+                      主窗口零注入、不刷屏左侧列表；每轮自动派发全新 <code>story-writer</code> 子智能体全量重拼上下文落笔，写完立即销毁。
                     </div>
                   </div>
                   <label className="st-switch" style={{ flexShrink: 0 }}>
                     <input
                       type="checkbox"
-                      checked={Boolean(data.config.statelessPerTurn)}
+                      checked={Boolean(data.config.directorMode)}
                       onChange={(e) =>
-                        callTool('tavern_app_update_config', {
-                          statelessPerTurn: e.target.checked,
-                          ...(e.target.checked ? { directorMode: false } : {}),
+                        callTool('story_app_update_config', {
+                          directorMode: e.target.checked,
+                          statelessPerTurn: false,
                         })
                       }
                     />
@@ -1339,7 +1678,7 @@ export function AppView() {
                     max={50}
                     value={data.config.postHistoryRefreshInterval}
                     onChange={(e) =>
-                      callTool('tavern_app_update_config', {
+                      callTool('story_app_update_config', {
                         postHistoryRefreshInterval: Math.max(0, Number(e.target.value) || 0),
                       })
                     }
@@ -1352,14 +1691,18 @@ export function AppView() {
                 <input
                   className="input"
                   placeholder="玩家称呼 ({{user}})"
-                  defaultValue={data.config.userName}
-                  onBlur={(e) => callTool('tavern_app_update_config', { userName: e.target.value })}
+                  value={userNameDraft}
+                  onChange={(e) => setUserNameDraft(e.target.value)}
+                  onBlur={() => callTool('story_app_update_config', { userName: userNameDraft })}
                 />
                 <textarea
                   className="textarea"
                   placeholder="玩家人设描述 ({{persona}})"
-                  defaultValue={data.config.userPersona}
-                  onBlur={(e) => callTool('tavern_app_update_config', { userPersona: e.target.value })}
+                  value={userPersonaDraft}
+                  onChange={(e) => setUserPersonaDraft(e.target.value)}
+                  onBlur={() =>
+                    callTool('story_app_update_config', { userPersona: userPersonaDraft })
+                  }
                 />
               </div>
             </>

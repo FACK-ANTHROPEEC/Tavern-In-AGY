@@ -3,7 +3,9 @@ import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { evaluateMacros } from '../src/core/macro-engine.js';
 import { compilePreset, parsePresetJson } from '../src/core/preset-parser.js';
-import { applyRegexScripts, splitFloorSegments } from '../src/core/regex-engine.js';
+import { applyRegexScripts, foldUnknownCustomTags, splitFloorSegments } from '../src/core/regex-engine.js';
+import { applyMvuUpdates } from '../src/core/mvu-engine.js';
+import { buildSandboxedSrcDoc, parseSlashCommandAction, parseSlashCommandToMessage } from '../src/ui/sandbox-shim.js';
 import { renderEjsTemplate } from '../src/core/ejs-engine.js';
 
 describe('extended ST macros & depth/prefill preset compilation', () => {
@@ -167,77 +169,136 @@ describe('ST regex engine & 3-way floor splitter', () => {
     const segs = splitFloorSegments(mixed);
     expect(segs.map((s) => s.kind)).toEqual(['text', 'html', 'widget']);
   });
+
+  it('folds ANY unseen custom XML tags generically while unwrapping prose containers and keeping HTML intact', () => {
+    const raw = [
+      '<brand_new_cot>未见过的新预设思维链</brand_new_cot>',
+      '<narrative>这是真正的暖纸正文。</narrative>',
+      '<custom_xyz_meta>某些元数据</custom_xyz_meta>',
+      '<div class="keep">标准HTML保留</div>',
+      '<StatusPlaceHolderImpl/>',
+    ].join('\n');
+
+    const folded = foldUnknownCustomTags(raw);
+    expect(folded).toContain('<details><summary>💭 brand_new_cot</summary>');
+    expect(folded).toContain('<details><summary>🏷️ custom_xyz_meta</summary>');
+    expect(folded).toContain('这是真正的暖纸正文。');
+    expect(folded).not.toContain('<narrative>');
+    expect(folded).not.toContain('<StatusPlaceHolderImpl/>');
+    expect(folded).toContain('<div class="keep">标准HTML保留</div>');
+  });
+
+  it('preserves <StatusPlaceHolderImpl/> for card regexes and isolates styled HTML widgets from leading prose', () => {
+    const mvuOut = applyMvuUpdates(
+      { hp: 100 },
+      '夜色深沉。\n<update><JSONPatch>[{"op":"replace","path":"/hp","value":90}]</JSONPatch></update>\n<StatusPlaceHolderImpl/>',
+    );
+    expect(mvuOut.statData.hp).toBe(90);
+    expect(mvuOut.cleanedText).toContain('<StatusPlaceHolderImpl/>');
+
+    const cardStatusRegex = [
+      {
+        scriptName: 'Render MVU Status Card',
+        findRegex: '/<StatusPlaceHolderImpl\\s*\\/?>/gi',
+        replaceString: '<style>.hud{color:gold}</style><div class="hud">HP: 90</div>',
+        disabled: false,
+        placement: [2],
+        markdownOnly: true,
+        promptOnly: false,
+      },
+    ];
+
+    const afterRegex = applyRegexScripts(mvuOut.cleanedText, cardStatusRegex, {
+      placement: 2,
+      target: 'display',
+      depth: 0,
+    });
+    const afterFallback = foldUnknownCustomTags(afterRegex);
+    const segs = splitFloorSegments(afterFallback);
+    expect(segs.map((s) => s.kind)).toEqual(['text', 'widget']);
+    if (segs[0].kind === 'text') expect(segs[0].content).toBe('夜色深沉。');
+    if (segs[1].kind === 'widget') expect(segs[1].html).toContain('class="hud"');
+  });
+
+  it('parses ST slash commands cleanly for preset option buttons (send & setInput) and exposes getCurrentMessageId', () => {
+    expect(parseSlashCommandToMessage('/send 继续探索主殿 || /trigger')).toBe('继续探索主殿');
+    expect(parseSlashCommandToMessage('/sendas name="主人" 倒杯红茶')).toBe('倒杯红茶');
+    expect(parseSlashCommandAction('/setinput 先观察四周动静')).toEqual({
+      action: 'setInput',
+      text: '先观察四周动静',
+    });
+    expect(parseSlashCommandToMessage('直接行动文本')).toBe('直接行动文本');
+    expect(parseSlashCommandToMessage('/trigger')).toBeNull();
+
+    const doc = buildSandboxedSrcDoc('<div>widget</div>', {
+      widgetId: 'w1',
+      charName: 'Lyra',
+      userName: 'Reader',
+      statData: {},
+      currentMessageId: 10,
+      currentNarrative: '正文<wave_options>选项A</wave_options>',
+      storyTurns: [{ index: 10, narrative: '正文<wave_options>选项A</wave_options>' }],
+    });
+    expect(doc).toContain('getCurrentMessageId');
+    expect(doc).toContain('CURRENT_ID = 10');
+  });
 });
 
-describe('real-world 4 community presets regression (local 预设参考/)', () => {
-  const presetsDir = path.resolve(process.cwd(), '预设参考');
-  const files = [
-    {
-      name: 'Kemini_Dramatron_v3.1改.json',
-      expectPrefill: true,
-      sampleAi: '「你好。」<disclaimer>免责</disclaimer><summary>一段摘要</summary>',
-    },
-    {
-      name: 'Meowssiah_1.9.12.json',
-      expectPrefill: false,
-      sampleAi: '<think_nya>思考中...</think_nya>\n正文第一段。\n<background>背景设定</background>',
-    },
-    {
-      name: '夏瑾 天琴座 Beta 3.8.json',
-      expectPrefill: false,
-      sampleAi: '她忽然露出一丝不容置疑的笑容，语气冷得如同寒冰。',
-    },
-    {
-      name: '我即浪潮-1110自改-Éclat·Turing.json',
-      expectPrefill: false,
-      sampleAi: '<wave_plan>构思提要</wave_plan>\n<content>夜风拂过长廊。</content>\n<wave_summary>两人相遇</wave_summary>',
-    },
-  ];
-
-  for (const item of files) {
-    const fullPath = path.join(presetsDir, item.name);
-    it.skipIf(!fs.existsSync(fullPath))(`compiles and executes regexes cleanly for ${item.name}`, () => {
-      const raw = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
-      const preset = parsePresetJson(raw, { name: item.name });
-      expect(preset.prompts.length).toBeGreaterThan(20);
-      expect(preset.regexScripts.length).toBeGreaterThan(0);
-
-      const compiled = compilePreset(
-        preset,
+describe('synthetic multi-preset compilation & regex pipeline regression', () => {
+  it('compiles a full multi-section preset with random macros, prefill, and display regexes cleanly', () => {
+    const raw = {
+      prompts: [
+        { identifier: 'main', name: 'Main Style', role: 'system', content: 'Style seed: {{random::ink::vellum::lantern}} for {{char}}.' },
+        { identifier: 'charDescription', name: 'Char', role: 'system', content: '', marker: true },
+        { identifier: 'chatHistory', name: 'History', role: 'system', content: '', marker: true },
+        { identifier: 'out', name: 'Output Rules', role: 'system', content: 'Reply cleanly to {{user}}.' },
+        { identifier: 'prefill', name: 'Prefill', role: 'assistant', content: 'Understood, continuing the scene.' },
+      ],
+      prompt_order: [
         {
-          char: '诗子',
-          user: '主人',
-          persona: '温柔体贴的主人',
-          scenario: '静谧书房',
-          vars: {},
-          lastUserMessage: '继续吧',
-          lastCharMessage: '好的，主人。',
-          lastMessageId: 3,
+          character_id: 100001,
+          order: [
+            { identifier: 'main', enabled: true },
+            { identifier: 'charDescription', enabled: true },
+            { identifier: 'chatHistory', enabled: true },
+            { identifier: 'out', enabled: true },
+            { identifier: 'prefill', enabled: true },
+          ],
         },
-        {
-          charDescription: '专属执事女仆。',
-          scenario: '静谧书房',
-        },
-      );
+      ],
+      extensions: {
+        regex_scripts: [
+          {
+            scriptName: 'Beautify Options',
+            findRegex: '/<custom_options>([\\s\\S]*?)<\\/custom_options>/g',
+            replaceString: '<style>.opt{color:#d8c3a5}</style><div class="opt">$1</div>',
+            disabled: false,
+            placement: [2],
+            markdownOnly: true,
+            promptOnly: false,
+          },
+        ],
+      },
+    };
 
-      expect(compiled.staticText.length).toBeGreaterThan(200);
-      expect(compiled.staticText).not.toContain('{{random::');
-      expect(compiled.staticText).not.toContain('{{roll ');
-      expect(compiled.staticText).not.toContain('{{lastUserMessage}}');
-      expect(compiled.staticText).not.toContain('{{lastCharMessage}}');
-      if (item.expectPrefill) {
-        expect(compiled.stats.prefillCount).toBeGreaterThan(0);
-        expect(compiled.postHistoryText).toContain('[Assistant Continuation Anchor]');
-      }
+    const preset = parsePresetJson(raw, { name: 'SyntheticPreset' });
+    const compiled = compilePreset(
+      preset,
+      { char: 'Lyra', user: 'Reader', vars: {} },
+      { charDescription: 'A calm archivist.' },
+    );
 
-      // Verify display regex pipeline executes cleanly without throwing and produces valid segments
-      const displayRendered = applyRegexScripts(item.sampleAi, preset.regexScripts, {
-        placement: 2,
-        target: 'display',
-        depth: 0,
-      });
-      const segments = splitFloorSegments(displayRendered);
-      expect(segments.length).toBeGreaterThan(0);
+    expect(compiled.staticText).not.toContain('{{random::');
+    expect(compiled.postHistoryText).toContain('[Assistant Continuation Anchor]');
+
+    const sampleAi = '<custom_think>Drafting beat</custom_think>\n「晚风微凉。」\n<custom_options>选项一</custom_options>';
+    const afterRegex = applyRegexScripts(sampleAi, preset.regexScripts, {
+      placement: 2,
+      target: 'display',
+      depth: 0,
     });
-  }
+    const afterFallback = foldUnknownCustomTags(afterRegex);
+    const segments = splitFloorSegments(afterFallback);
+    expect(segments.map((s) => s.kind)).toEqual(['html', 'text', 'widget']);
+  });
 });

@@ -27,6 +27,14 @@ function copyRecursive(src, dest) {
 console.log(`Installing TavernInAGY plugin to: ${pluginTarget}`);
 fs.mkdirSync(pluginTarget, { recursive: true });
 
+// Clean stale agents/skills before copying so renamed manifests never linger
+for (const sub of ['agents', 'skills']) {
+  const dir = path.join(pluginTarget, sub);
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // 1. Copy plugin manifests, skills, assets
 copyRecursive(path.join(projectRoot, 'plugin'), pluginTarget);
 

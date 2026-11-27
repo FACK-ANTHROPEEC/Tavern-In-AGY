@@ -281,10 +281,10 @@ export function applyMvuUpdates(
     }
   }
 
-  // Strip system/MVU blocks from narrative for clean Warm Ink Serif reading
+  // Strip MVU patch blocks from narrative; keep <StatusPlaceHolderImpl/> so card display regexes can render status bars
+  // (if no card regex consumes it, FloorRenderer's generic fallback cleanly strips leftover empty placeholders).
   const cleanedText = text
     .replace(/<update(?:variable)?>[\s\S]*?<\/update(?:variable)?>/gi, '')
-    .replace(/<StatusPlaceHolderImpl\s*\/?>/gi, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 

@@ -24,7 +24,7 @@ describe('MVU engine (generic stat_data + RFC 6902 JSON Patch)', () => {
     expect(res.rejectedPaths).toEqual(['/主面/_本源熔炉开关']);
     expect((res.statData.主面 as Record<string, unknown>).本源熔炉).toBe(500);
     expect((res.statData.主面 as Record<string, unknown>)._本源熔炉开关).toBe('OPEN');
-    expect(res.cleanedText).toBe('她轻轻一笑。');
+    expect(res.cleanedText).toBe('她轻轻一笑。\n\n<StatusPlaceHolderImpl/>');
   });
 
   it('supports JS-Slash-Runner scoped variable macros and strips $ hidden keys', () => {
@@ -49,62 +49,84 @@ describe('EJS ST-Prompt-Template engine', () => {
   });
 });
 
-describe('Real Reference Cards Integration Tests (卡片参考/)', () => {
-  const card2Path = path.resolve(process.cwd(), '卡片参考', '恶女婊子 高质量的MVU与前端角色卡.png');
-  const card1Path = path.resolve(
-    process.cwd(),
-    '卡片参考',
-    '大辰辰皇 V6 轻量版 我的自制角色卡，没有MVU变量，有自定义变量和酒馆助手脚本.json',
-  );
-
-  it.skipIf(!fs.existsSync(card2Path))(
-    'parses real MVU card (恶女婊子), extracts [initvar], renders EJS, and collects dynamic CSP origins',
-    () => {
-      const card = parseCharacterCardPng(fs.readFileSync(card2Path));
-      expect(card.embeddedLorebook?.entries.length).toBeGreaterThan(20);
-      expect(card.regexScripts?.length).toBeGreaterThan(0);
-      expect(card.resourceOrigins).toContain('https://files.catbox.moe');
-
-      const initVar = extractInitVarFromLorebooks([card.embeddedLorebook!], '测试主角');
-      expect(initVar).not.toBeNull();
-      expect((initVar!.主面 as Record<string, unknown>)._本源熔炉开关).toBe('OPEN');
-
-      const bundle = assembleSessionStart({
-        config: { ...createDefaultConfig(), userName: '测试主角' },
-        card,
-        preset: null,
-        lorebooks: [],
-        session: {
-          conversationId: 'test-mvu',
-          turnCount: 0,
-          lastUserInputHash: '',
-          injectedLorebookTurns: {},
-          lastStateInjectedHash: '',
-          lastPostHistoryTurn: 0,
-          recentMessages: [],
-          variables: {},
-          statData: {},
-          state: createDefaultState(),
-          latestOptions: [],
+describe('Synthetic MVU + EJS + Extension Card Integration', () => {
+  it('extracts [initvar], renders EJS templates, and preserves card scripts & custom extensions', () => {
+    const rawCard = {
+      spec: 'chara_card_v3',
+      data: {
+        name: 'Lyra',
+        description: 'An archivist in a warm candlelit study.',
+        personality: 'Calm and observant.',
+        scenario: 'Late evening in the observatory.',
+        first_mes: 'The lantern flickers softly. <img src="https://files.catbox.moe/sample.png" />',
+        character_book: {
+          name: 'Lyra Book',
+          entries: [
+            {
+              uid: 1,
+              comment: '[initvar]',
+              key: ['[initvar]'],
+              content: '{"status":{"_locked":"OPEN","energy":80}}',
+              enabled: false,
+              constant: false,
+            },
+            {
+              uid: 2,
+              comment: 'Dynamic Status Block',
+              key: [],
+              content: '<% if (stat_data.status && stat_data.status._locked === "OPEN") { %>ENERGY:<%= stat_data.status.energy %><% } %>',
+              enabled: true,
+              constant: true,
+              position: 'before_char',
+            },
+          ],
         },
-      });
+        extensions: {
+          regex_scripts: [
+            {
+              scriptName: 'Portrait',
+              findRegex: '/<portrait>/g',
+              replaceString: '<img src="https://files.catbox.moe/sample.png" />',
+              disabled: false,
+              placement: [2],
+            },
+          ],
+          custom_portraits: { default: 'https://files.catbox.moe/sample.png' },
+        },
+      },
+    };
 
-      expect(bundle.stats.initializedMvu).toBe(true);
-      expect(bundle.systemMessage).toContain('<status_current_variables>');
-      expect(bundle.systemMessage).toContain('本源熔炉为 OPEN');
-      expect(bundle.systemMessage).not.toContain('<%_');
-    },
-  );
+    const card = parseCharacterCardJson(rawCard);
+    expect(card.embeddedLorebook?.entries.length).toBe(2);
+    expect(card.resourceOrigins).toContain('https://files.catbox.moe');
+    expect(card.customExtensions?.custom_portraits).toBeDefined();
 
-  it.skipIf(!fs.existsSync(card1Path))(
-    'parses real custom-script card (大辰辰皇 V6), preserving 100 lorebook entries, tavern_helper scripts, and portraits',
-    () => {
-      const raw = JSON.parse(fs.readFileSync(card1Path, 'utf8'));
-      const card = parseCharacterCardJson(raw);
-      expect(card.embeddedLorebook?.entries.length).toBe(100);
-      expect(card.tavernHelperScripts?.length).toBe(2);
-      expect(card.customExtensions?.dch_portraits).toBeDefined();
-      expect(card.customExtensions?.dch_maps).toBeDefined();
-    },
-  );
+    const initVar = extractInitVarFromLorebooks([card.embeddedLorebook!], 'Reader');
+    expect(initVar).not.toBeNull();
+    expect((initVar!.status as Record<string, unknown>)._locked).toBe('OPEN');
+
+    const bundle = assembleSessionStart({
+      config: { ...createDefaultConfig(), userName: 'Reader' },
+      card,
+      preset: null,
+      lorebooks: [],
+      session: {
+        conversationId: 'test-mvu',
+        turnCount: 0,
+        lastUserInputHash: '',
+        injectedLorebookTurns: {},
+        lastStateInjectedHash: '',
+        lastPostHistoryTurn: 0,
+        recentMessages: [],
+        variables: {},
+        statData: {},
+        state: createDefaultState(),
+        latestOptions: [],
+      },
+    });
+
+    expect(bundle.stats.initializedMvu).toBe(true);
+    expect(bundle.systemMessage).toContain('ENERGY:80');
+    expect(bundle.systemMessage).not.toContain('<%');
+  });
 });
