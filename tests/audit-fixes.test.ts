@@ -177,4 +177,17 @@ _.assign('meta', 'note', 'foo (bar); baz');
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('unwraps full HTML documents nested inside <details> so closed <details> never breaks innerText/doctype', () => {
+    const wrapped = `<details>\n<summary>角色状态栏</summary>\n\`\`\`\n<!doctype html><html><head><title>角色状态面板</title></head><body><div id="stat-data-source">{"ok":1}</div></body></html>\n\`\`\`\n</details>`;
+    const segs = splitFloorSegments(wrapped);
+    expect(segs).toHaveLength(1);
+    expect(segs[0].kind).toBe('widget');
+    if (segs[0].kind === 'widget') {
+      expect(segs[0].html.startsWith('<!doctype html>')).toBe(true);
+      expect(segs[0].html).not.toContain('<details');
+      expect(segs[0].html).not.toContain('```');
+      expect(segs[0].title).toBe('角色状态面板');
+    }
+  });
 });

@@ -921,8 +921,8 @@ export function AppView() {
                     <FloorRenderer
                       key={`opening-${activeCard.id}-${gIdx}`}
                       narrative={currentOpening
-                        .replace(/\{\{char\}\}/gi, activeCard.name)
-                        .replace(/\{\{user\}\}/gi, data.config.userName || 'User')}
+                        .replace(/\{\{char\}\}|<char>/gi, activeCard.name)
+                        .replace(/\{\{user\}\}|<user>/gi, data.config.userName || 'User')}
                       messageId={0}
                       depth={allStoryTurns.length}
                       regexScripts={data.activeDisplayRegexScripts ?? []}

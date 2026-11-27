@@ -160,8 +160,15 @@ export function applyRegexScripts(
           },
         );
 
-        if (opts.macroCtx && replaced.includes('{{')) {
-          replaced = evaluateMacros(replaced, opts.macroCtx);
+        if (opts.macroCtx) {
+          if (replaced.includes('{{')) {
+            replaced = evaluateMacros(replaced, opts.macroCtx);
+          }
+          if (/<(?:user|char)>/i.test(replaced)) {
+            replaced = replaced
+              .replace(/<user>/gi, opts.macroCtx.user)
+              .replace(/<char>/gi, opts.macroCtx.char);
+          }
         }
 
         return replaced;
@@ -395,10 +402,17 @@ export function splitFloorSegments(input: string): FloorSegment[] {
       });
     } else if (detailsHtml !== undefined) {
       if (needsSandboxWidget(detailsHtml)) {
+        // If a <details> wrapper encloses a full HTML document (optionally fenced with ```),
+        // unwrap the inner HTML document and preserve <summary> as the widget title.
+        // Keeping <details> closed inside an iframe srcDoc breaks HTML5 <!doctype>/<head>
+        // and causes Chromium's `element.innerText` to return "" on closed-details descendants.
+        const innerDocMatch = detailsHtml.match(/(<!doctype\s+html[\s\S]*?<\/html>|<html\b[\s\S]*?<\/html>)/i);
+        const summaryTitle = extractHtmlTitle(detailsHtml);
+        const widgetHtml = innerDocMatch ? innerDocMatch[1].trim() : detailsHtml.trim();
         segments.push({
           kind: 'widget',
-          html: detailsHtml.trim(),
-          title: extractHtmlTitle(detailsHtml),
+          html: widgetHtml,
+          title: summaryTitle || extractHtmlTitle(widgetHtml),
         });
       } else {
         segments.push({ kind: 'html', html: sanitizeStaticHtml(detailsHtml.trim()) });
