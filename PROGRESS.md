@@ -2,8 +2,12 @@
 
 ## 1. 当前状态与里程碑
 - **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agents `story-director`/`story-writer`）打造的本地互动小说与角色扮演创作引擎（Apache-2.0，零反代、零凭据抽取）。
-- **当前阶段**：**v0.8.1**（已发布 GitHub Release；删除旧 `v0.8.0`），全量 12 套件 / 60 用例全绿，本地插件与 `origin/main` 完全同步。
+- **当前阶段**：**v0.8.1**（已发布 GitHub Release；删除旧 `v0.8.0`），全量 12 套件 / 62 用例全绿，本地插件与 `origin/main` 完全同步。
 - **最近完成**：
+  - **ST 通用生态底座收口（YAML `[initvar]` + jQuery/正文美化沙箱 + 65 图床白名单）**：
+    - `mvu-engine.ts` 引入 `js-yaml` 支持 YAML 格式 `[initvar]` 解析（避免 JSON 正则误吞内联 `{}`）；
+    - `sandbox-shim.ts` / `FloorRenderer.tsx` / `App.tsx` 内置通用轻量级 `window.$`/`jQuery`、`errorCatched`、`tavern_events`、安全内存 `localStorage` 与隔离正文美化沙箱（`#chat > .mes > .mes_block > .mes_text`），自动兼容社区所有 `#chat .mes .mes_text` 排版/词条弹窗脚本；
+    - `mcp-server.ts` 预置 65 个主流图床/字体/CDN 域名白名单 + 动态 `card.resourceOrigins` 兜底。
   - **ST V2/V3 世界书解析与槽位精确落位修复**：
     - `lorebook-engine.ts` / `types.ts` 完整解析 `entry.extensions` 中的 `prevent_recursion`、`exclude_recursion`、`delay_until_recursion`、`selectiveLogic`、`position`、`depth`、`scan_depth` 等字段，彻底根除多角色大卡世界书递归雪崩；
     - `prompt-assembler.ts` 将常驻蓝灯与动态触发绿灯统一按 ST `position`（`before_char` / `after_char` / `in_chat`）、`depth` 降序与 `insertion_order` 升序精确回填对应槽位并去掉 `[Lore: ...]` 外壳，完整保留作者配对嵌套块。
@@ -13,7 +17,7 @@
     - 前端与安全：`sandbox-shim.ts` 修复 `runRegisteredSchemas` 返回旧 `STAT`；`regex-engine.ts` 修复 `sanitizeStaticHtml` 脚本体残留与折叠标签内占位符转义；`App.tsx` 补齐中文输入法 `isComposing`、`sendingRef`、草稿恢复、弹窗失败不关窗、切卡防串台与三处 iframe `evt.source` 校验。
   - **`/rp` 快捷入口与单窗口零污染隔离**：技能重命名为 `/rp`（`plugin/skills/rp/SKILL.md`），`SessionRuntime.rpModeActive` 按 `conversationId` 隔离，普通编程窗口 100% 零注入，`/rp off` 随时退出。
   - **v0.8.0 记忆插件基础版 + 16 项高危审计修复**：独立「记忆」Tab + 滑动窗口逐楼小总结；修复导演写手隔离/防重、`</script>` 沙箱逃逸、XSS/正则/高度回环/载荷预算/并发写入等问题。
-- **验证状态**：`npm test` **12 套件 / 60 用例全绿（0 skipped）**；`npm run build` & `npm run install:plugin` 通过。
+- **验证状态**：`npm test` **12 套件 / 62 用例全绿（0 skipped）**；`npm run build` & `npm run install:plugin` 通过。
 
 ## 2. 架构约束与关键契约
 - **目录与分层红线**：

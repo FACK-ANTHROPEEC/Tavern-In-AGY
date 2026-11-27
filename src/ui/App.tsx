@@ -8,6 +8,7 @@ import { MvuTreeView } from './MvuTreeView';
 import { TavernFrontendHost, type CardFrontendPayload } from './TavernFrontendHost';
 import { MvuZodRuntimeHost } from './MvuZodRuntimeHost';
 import { FloorRenderer } from './FloorRenderer';
+import { isProseBeautifierScript } from './sandbox-shim';
 import { unpackCharacterCardPng } from './png-unpack';
 
 if (typeof window !== 'undefined') {
@@ -658,6 +659,14 @@ export function AppView() {
     setMvuSchemaCount(0);
   }, [activeCard?.id]);
 
+  // Extract enabled SillyTavern `#chat .mes .mes_text` prose-beautifier scripts for FloorRenderer
+  const activeProseBeautifierScripts = useMemo(() => {
+    if (!cardFrontend || !activeCard || cardFrontend.cardId !== activeCard.id) return [];
+    return (cardFrontend.helperScripts ?? []).filter(
+      (s) => s.enabled && isProseBeautifierScript(s.content),
+    );
+  }, [cardFrontend, activeCard]);
+
   // Auto-load card/preset helper scripts in the background so MVU Zod schemas register automatically
   useEffect(() => {
     const hasAnyHelper =
@@ -951,6 +960,7 @@ export function AppView() {
                       depth={allStoryTurns.length}
                       regexScripts={data.activeDisplayRegexScripts ?? []}
                       enableRegex={enableRegexBeautify}
+                      proseBeautifierScripts={activeProseBeautifierScripts}
                       unknownTagMode={unknownTagMode}
                       charName={activeCard.name}
                       userName={data.config.userName || 'User'}
@@ -1130,6 +1140,7 @@ export function AppView() {
                         depth={depth}
                         regexScripts={data.activeDisplayRegexScripts ?? []}
                         enableRegex={enableRegexBeautify}
+                        proseBeautifierScripts={activeProseBeautifierScripts}
                         unknownTagMode={unknownTagMode}
                         memorySummary={t.memorySummary}
                         memorySummaryDisplayMode={data.config.memoryPlugin?.summaryDisplayMode ?? 'fold'}

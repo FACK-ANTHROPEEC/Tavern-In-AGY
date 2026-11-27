@@ -1,3 +1,4 @@
+import { load as parseYaml } from 'js-yaml';
 import type { Lorebook } from './types.js';
 
 export function cloneDeep<T>(value: T): T {
@@ -239,15 +240,19 @@ function tryParseJsonObject(raw: string): Record<string, unknown> | null {
         return parsed as Record<string, unknown>;
       }
     } catch {
-      const match = candidate.match(/\{[\s\S]*\}/);
-      if (match) {
-        try {
-          const parsed = JSON.parse(match[0]);
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            return parsed as Record<string, unknown>;
+      // Only extract `{...}` substring when the document itself starts with `{` (JSON/JSONC);
+      // never match an inline `{}` inside a YAML document (e.g. `jobs: {}`).
+      if (candidate.trimStart().startsWith('{')) {
+        const match = candidate.match(/\{[\s\S]*\}/);
+        if (match) {
+          try {
+            const parsed = JSON.parse(match[0]);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              return parsed as Record<string, unknown>;
+            }
+          } catch {
+            // continue next attempt
           }
-        } catch {
-          // continue next attempt
         }
       }
     }
@@ -278,6 +283,18 @@ function deepMergeObjects(
     }
   }
   return target;
+}
+
+function tryParseYamlObject(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = parseYaml(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function isInitVarEntry(comment: string, keys: string[]): boolean {
@@ -316,7 +333,7 @@ export function extractInitVarFromLorebooks(
       if (charName) {
         raw = raw.replace(/<char>/gi, charName).replace(/\{\{char\}\}/gi, charName);
       }
-      const parsed = tryParseJsonObject(raw);
+      const parsed = tryParseJsonObject(raw) ?? tryParseYamlObject(raw);
       if (parsed) {
         deepMergeObjects(merged, parsed);
         foundAny = true;

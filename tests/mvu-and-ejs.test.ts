@@ -3,6 +3,7 @@ import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { z as zod4 } from 'zod4';
 import { applyMvuUpdates, extractInitVarFromLorebooks } from '../src/core/mvu-engine.js';
+import { buildProseBeautifierSrcDoc, isProseBeautifierScript } from '../src/ui/sandbox-shim.js';
 import { renderEjsTemplate } from '../src/core/ejs-engine.js';
 import { evaluateMacros } from '../src/core/macro-engine.js';
 import { parseCharacterCardJson, parseCharacterCardPng } from '../src/core/card-parser.js';
@@ -235,5 +236,89 @@ describe('Synthetic MVU + EJS + Extension Card Integration', () => {
     expect(bundle.stats.initializedMvu).toBe(true);
     expect(bundle.systemMessage).toContain('ENERGY:80');
     expect(bundle.systemMessage).not.toContain('<%');
+  });
+
+  it('extracts YAML-formatted [initvar] lorebook entries with {{user}} substitution', () => {
+    const initVar = extractInitVarFromLorebooks(
+      [
+        {
+          id: 'lb-yaml',
+          name: 'YAML InitVar Book',
+          scanDepth: 4,
+          tokenBudget: 2048,
+          recursiveScanning: false,
+          maxRecursionSteps: 2,
+          importedAt: '',
+          entries: [
+            {
+              uid: '1',
+              comment: '[initvar]变量初始化勿开',
+              keys: [],
+              secondaryKeys: [],
+              selective: false,
+              selectiveLogic: 0,
+              constant: true,
+              enabled: false,
+              order: 10,
+              position: 'before_char',
+              content: `系统变量:
+  日期:
+    年: 2025
+    月: 8
+    日: 20
+    星期: 周日
+    时间类型: 休息日
+角色档案:
+  基础信息:
+    姓名: {{user}}
+    年龄: 24`,
+            },
+          ],
+        },
+      ],
+      '辰欢',
+    );
+
+    expect(initVar).not.toBeNull();
+    const sys = initVar!.系统变量 as Record<string, Record<string, unknown>>;
+    const profile = initVar!.角色档案 as Record<string, Record<string, unknown>>;
+    expect(sys.日期.年).toBe(2025);
+    expect(sys.日期.星期).toBe('周日');
+    expect(profile.基础信息.姓名).toBe('辰欢');
+    expect(profile.基础信息.年龄).toBe(24);
+  });
+
+  it('detects ST #chat .mes .mes_text prose-beautifier scripts and builds isolated prose srcDoc with tavern_events', () => {
+    const validProseScript = `
+      const st = document.createElement('style');
+      st.textContent = '#chat .mes .mes_text.custom-theme { color: gold; }';
+      document.head.appendChild(st);
+      const chat = document.getElementById('chat');
+      if (chat) new MutationObserver(() => {}).observe(chat, { childList: true, subtree: true });
+    `;
+    const mvuSchemaScript = `registerMvuSchema(z.object({ a: z.number() }));`;
+
+    expect(isProseBeautifierScript(validProseScript)).toBe(true);
+    expect(isProseBeautifierScript(mvuSchemaScript)).toBe(false);
+
+    const html = buildProseBeautifierSrcDoc(
+      '第一段**加粗**文本\n\n---\n\n第二段*斜体*文本',
+      [{ name: 'Custom Theme', content: validProseScript }],
+      {
+        widgetId: 'p-test',
+        charName: 'Tester',
+        userName: 'User',
+        statData: { hp: 100 },
+        currentMessageId: 2,
+      },
+    );
+
+    expect(html).toContain('<div id="chat">');
+    expect(html).toContain('class="mes" mesid="2"');
+    expect(html).toContain('<div class="mes_text"><p>第一段<strong>加粗</strong>文本</p>');
+    expect(html).toContain('<hr>');
+    expect(html).toContain('window.tavern_events = tavern_events;');
+    expect(html).toContain('window.jQuery = jQueryShim;');
+    expect(html).toContain('window.errorCatched = errorCatched;');
   });
 });

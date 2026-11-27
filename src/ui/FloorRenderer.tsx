@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { RegexScript } from '../core/types';
 import { applyRegexScripts, foldUnknownCustomTags, splitFloorSegments } from '../core/regex-engine';
 import { extractMemorySummary, stripMemorySummaryTags } from '../core/memory-engine';
-import { buildSandboxedSrcDoc, parseSlashCommandAction } from './sandbox-shim';
+import { buildProseBeautifierSrcDoc, buildSandboxedSrcDoc, parseSlashCommandAction } from './sandbox-shim';
 
 interface FloorRendererProps {
   narrative: string;
@@ -10,6 +10,7 @@ interface FloorRendererProps {
   depth: number;
   regexScripts: RegexScript[];
   enableRegex: boolean;
+  proseBeautifierScripts?: Array<{ name: string; content: string }>;
   unknownTagMode?: 'fold' | 'keep' | 'hide';
   memorySummary?: string;
   memorySummaryDisplayMode?: 'fold' | 'hide';
@@ -164,12 +165,123 @@ function InlineRegexWidget({
   );
 }
 
+/**
+ * Isolated `sandbox="allow-scripts"` iframe for SillyTavern `#chat .mes .mes_text` prose beautifier scripts.
+ * Omitting `allow-same-origin` ensures scripts cannot access outer React `window.parent.document`
+ * and cleanly fall back to the local `#chat > .mes > .mes_block > .mes_text` stage.
+ */
+function SandboxedProseBlock({
+  proseText,
+  scripts,
+  messageId,
+  rawNarrative,
+  charName,
+  userName,
+  statData,
+  storyTurns,
+  greetings,
+  activeGreetingIndex,
+  onSendMessage,
+  onSetInput,
+  onUpdateStatData,
+  onSelectGreeting,
+}: {
+  proseText: string;
+  scripts: Array<{ name: string; content: string }>;
+  messageId: number;
+  rawNarrative: string;
+  charName: string;
+  userName: string;
+  statData: Record<string, unknown>;
+  storyTurns?: Array<{ index: number; userMessage?: string; narrative: string }>;
+  greetings?: string[];
+  activeGreetingIndex?: number;
+  onSendMessage: (text: string) => void;
+  onSetInput?: (text: string) => void;
+  onUpdateStatData?: (nextStatData: Record<string, unknown>) => void;
+  onSelectGreeting?: (index: number) => void;
+}) {
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [height, setHeight] = useState<number>(180);
+  const widgetId = useMemo(() => `p-${Math.random().toString(36).slice(2, 9)}`, []);
+
+  useEffect(() => {
+    const onMessage = (evt: MessageEvent) => {
+      if (evt.source !== iframeRef.current?.contentWindow) return;
+      const msg = evt.data;
+      if (!msg || typeof msg !== 'object' || msg.widgetId !== widgetId) return;
+      if (msg.type === 'tavern:resize' && typeof msg.height === 'number') {
+        setHeight(Math.max(60, Math.min(12000, Math.ceil(msg.height) + 12)));
+      } else if (msg.type === 'tavern:selectGreeting' && typeof msg.index === 'number') {
+        onSelectGreeting?.(msg.index);
+      } else if (msg.type === 'tavern:slash' && typeof msg.cmd === 'string') {
+        const parsed = parseSlashCommandAction(msg.cmd);
+        if (parsed?.action === 'selectGreeting' && typeof parsed.index === 'number') {
+          onSelectGreeting?.(parsed.index);
+        } else if (parsed?.action === 'setInput') {
+          onSetInput?.(parsed.text);
+        } else if (parsed?.action === 'send') {
+          onSendMessage(parsed.text);
+        }
+      } else if (msg.type === 'tavern:updateStat' && msg.statData && typeof msg.statData === 'object') {
+        onUpdateStatData?.(msg.statData as Record<string, unknown>);
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [widgetId, onSendMessage, onSetInput, onUpdateStatData, onSelectGreeting]);
+
+  useEffect(() => {
+    try {
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: 'tavern:statSync', statData },
+        '*',
+      );
+    } catch {
+      // ignore if iframe not yet ready
+    }
+  }, [statData]);
+
+  const scriptsKey = useMemo(() => scripts.map((s) => `${s.name}:${s.content.length}`).join('|'), [scripts]);
+
+  const srcDoc = useMemo(
+    () =>
+      buildProseBeautifierSrcDoc(proseText, scripts, {
+        widgetId,
+        charName,
+        userName,
+        statData,
+        currentMessageId: messageId,
+        currentNarrative: rawNarrative,
+        greetings,
+        activeGreetingIndex,
+        storyTurns,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [proseText, scriptsKey, widgetId, charName, userName, messageId, rawNarrative, greetings?.length, activeGreetingIndex],
+  );
+
+  return (
+    <div className="inline-widget-wrap">
+      <iframe
+        ref={iframeRef}
+        title="Prose Beautifier"
+        className="inline-widget-frame"
+        sandbox="allow-scripts"
+        srcDoc={srcDoc}
+        style={{ height }}
+      />
+    </div>
+  );
+}
+
 export function FloorRenderer({
   narrative,
   messageId,
   depth,
   regexScripts,
   enableRegex,
+  proseBeautifierScripts,
   unknownTagMode = 'fold',
   memorySummary,
   memorySummaryDisplayMode = 'fold',
@@ -228,6 +340,27 @@ export function FloorRenderer({
     <div className="floor-segments">
       {segments.map((seg, idx) => {
         if (seg.kind === 'text') {
+          if (enableRegex && proseBeautifierScripts && proseBeautifierScripts.length > 0) {
+            return (
+              <SandboxedProseBlock
+                key={`prose-${idx}`}
+                proseText={seg.content}
+                scripts={proseBeautifierScripts}
+                messageId={messageId}
+                rawNarrative={cleanNarrative}
+                charName={charName}
+                userName={userName}
+                statData={statData}
+                storyTurns={storyTurns}
+                greetings={greetings}
+                activeGreetingIndex={activeGreetingIndex}
+                onSendMessage={onSendMessage}
+                onSetInput={onSetInput}
+                onUpdateStatData={onUpdateStatData}
+                onSelectGreeting={onSelectGreeting}
+              />
+            );
+          }
           return renderProseText(seg.content, `txt-${idx}`);
         }
         if (seg.kind === 'html') {
