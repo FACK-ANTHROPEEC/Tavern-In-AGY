@@ -198,9 +198,45 @@ export interface CompilePresetOptions {
   ejsRender?: (raw: string) => string;
 }
 
+export interface PositionedPromptBlock {
+  text: string;
+  depth: number;
+  role: 'system' | 'user' | 'assistant';
+  order: number;
+  seq: number;
+}
+
+const IN_CHAT_ROLE_RANK: Record<'user' | 'assistant' | 'system', number> = {
+  user: 0,
+  assistant: 1,
+  system: 2,
+};
+
+/**
+ * SillyTavern official in-chat depth sorting rule:
+ * 1. `depth` descending (deeper blocks first; depth 1 before user input, depth 0 after user input)
+ * 2. Hard role grouping at the same depth: `user` -> `assistant` -> `system`
+ * 3. `order` (`injection_order`) ascending within the same role
+ * 4. Original insertion sequence ascending for stability
+ */
+export function compareInChatDepthBlocks(
+  a: PositionedPromptBlock,
+  b: PositionedPromptBlock,
+): number {
+  if (b.depth !== a.depth) return b.depth - a.depth;
+  const roleDiff = IN_CHAT_ROLE_RANK[a.role] - IN_CHAT_ROLE_RANK[b.role];
+  if (roleDiff !== 0) return roleDiff;
+  if (a.order !== b.order) return a.order - b.order;
+  return a.seq - b.seq;
+}
+
 export interface CompiledPreset {
   staticText: string;
   postHistoryText: string;
+  /** Structured In-Chat (`injection_position === 1`) blocks sorted by official ST depth/role/order rules */
+  depthBlocks: PositionedPromptBlock[];
+  /** Relative (`injection_position === 0`) blocks positioned after `chatHistory` (PHI / JB / Prefill) */
+  trailingPostBlocks: string[];
   variables: Record<string, string>;
   stats: {
     enabledCount: number;
@@ -212,18 +248,12 @@ export interface CompiledPreset {
   };
 }
 
-interface PositionedBlock {
-  text: string;
-  depth: number;
-  order: number;
-  seq: number;
-}
-
 /**
  * Evaluates a parsed Preset in strict prompt_order sequence:
  * - Items before `chatHistory` (and injectionPosition === 0) compile into `staticText` (L1 SessionStart)
- * - Items after `chatHistory` (or injectionPosition === 1) compile into `postHistoryText` (L3 PreInvocation),
- *   ordered by `injectionDepth` desc (deeper first, depth 0 closest to end) and `injectionOrder` asc.
+ * - Items with `injectionPosition === 1` compile into `depthBlocks`, ordered by `depth` desc,
+ *   role (`user` -> `assistant` -> `system`), and `injectionOrder` asc.
+ * - Relative items after `chatHistory` compile into `trailingPostBlocks` (placed AFTER depth 0 blocks).
  * - Enabled `role: "assistant"` items after `chatHistory` are bridged as structured continuation anchors.
  * - `setvar` / `getvar` state and optional EJS rendering flow seamlessly from top to bottom.
  */
@@ -234,7 +264,7 @@ export function compilePreset(
   options: CompilePresetOptions = {},
 ): CompiledPreset {
   const staticBlocks: string[] = [];
-  const depthBlocks: PositionedBlock[] = [];
+  const depthBlocks: PositionedPromptBlock[] = [];
   const trailingPostBlocks: string[] = [];
 
   let afterChatHistory = false;
@@ -282,6 +312,7 @@ export function compilePreset(
       depthBlocks.push({
         text: formatRoleTaggedBlock(item.role, rendered, false),
         depth: item.injectionDepth,
+        role: item.role,
         order: item.injectionOrder,
         seq: seq++,
       });
@@ -297,12 +328,8 @@ export function compilePreset(
     }
   }
 
-  // Order depth-injected blocks: deeper depth first (e.g. depth 4 before depth 0), then injectionOrder asc
-  depthBlocks.sort((a, b) => {
-    if (b.depth !== a.depth) return b.depth - a.depth;
-    if (a.order !== b.order) return a.order - b.order;
-    return a.seq - b.seq;
-  });
+  // Official ST order: depth desc -> role (user -> assistant -> system) -> order asc -> seq asc
+  depthBlocks.sort(compareInChatDepthBlocks);
 
   const postHistoryBlocks = [...depthBlocks.map((b) => b.text), ...trailingPostBlocks];
   const staticText = staticBlocks.join('\n\n');
@@ -311,6 +338,8 @@ export function compilePreset(
   return {
     staticText,
     postHistoryText,
+    depthBlocks,
+    trailingPostBlocks,
     variables: { ...ctx.vars },
     stats: {
       enabledCount,

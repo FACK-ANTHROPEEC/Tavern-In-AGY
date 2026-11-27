@@ -8,7 +8,11 @@ import type {
   TavernConfig,
 } from './types.js';
 import { evaluateMacros, type MacroContext } from './macro-engine.js';
-import { compilePreset } from './preset-parser.js';
+import {
+  compareInChatDepthBlocks,
+  compilePreset,
+  type PositionedPromptBlock,
+} from './preset-parser.js';
 import { scanLorebooks } from './lorebook-engine.js';
 import { applyMvuUpdates, extractInitVarFromLorebooks } from './mvu-engine.js';
 import { renderEjsTemplate } from './ejs-engine.js';
@@ -123,8 +127,19 @@ export function assembleSessionStart(params: {
   session: SessionRuntime;
   resumedStoryBlock?: string;
   recentTurnTexts?: string[];
+  /** Current turn user input (Director Mode); placed strictly BEFORE Depth=0 blocks and Post-History Instructions */
+  currentUserInput?: string;
 }): SessionStartBundle {
-  const { config, card, preset, lorebooks, session, resumedStoryBlock, recentTurnTexts } = params;
+  const {
+    config,
+    card,
+    preset,
+    lorebooks,
+    session,
+    resumedStoryBlock,
+    recentTurnTexts,
+    currentUserInput,
+  } = params;
   const allBooks = card.embeddedLorebook ? [card.embeddedLorebook, ...lorebooks] : lorebooks;
   const userName = config.userName || 'User';
 
@@ -150,6 +165,7 @@ export function assembleSessionStart(params: {
     }
   }
 
+  const trimmedCurrentUserInput = currentUserInput?.trim() ?? '';
   const ctx: MacroContext = {
     char: card.name,
     user: userName,
@@ -157,6 +173,8 @@ export function assembleSessionStart(params: {
     scenario: card.scenario,
     vars: { ...session.variables },
     statData,
+    lastUserMessage: trimmedCurrentUserInput || undefined,
+    lastMessage: trimmedCurrentUserInput || undefined,
   };
 
   const ejsRender = (raw: string): string =>
@@ -179,8 +197,7 @@ export function assembleSessionStart(params: {
 
   // Merge constant + dynamically triggered lorebook entries and route every entry
   // to its exact SillyTavern slot (`before_char`, `after_char`, `in_chat`), sorted by
-  // ST insertion_order ascending (and depth descending for `in_chat`) so paired
-  // header/item/footer blocks (e.g. `===开始===` / item / `===结束===`) stay intact.
+  // ST insertion_order ascending so paired header/item/footer blocks stay intact.
   const allActiveLore = [...scan.constantBefore, ...scan.constantAfter, ...scan.triggered];
   const beforeCharLore = allActiveLore
     .filter((x) => x.entry.position === 'before_char')
@@ -188,18 +205,12 @@ export function assembleSessionStart(params: {
   const afterCharLore = allActiveLore
     .filter((x) => x.entry.position === 'after_char')
     .sort((a, b) => a.entry.order - b.entry.order);
-  const inChatLore = allActiveLore
-    .filter((x) => x.entry.position === 'in_chat')
-    .sort((a, b) => {
-      const depthDiff = (b.entry.depth ?? 0) - (a.entry.depth ?? 0);
-      return depthDiff !== 0 ? depthDiff : a.entry.order - b.entry.order;
-    });
+  const inChatLore = allActiveLore.filter((x) => x.entry.position === 'in_chat');
 
   // Render EJS per lorebook entry first so one malformed entry never breaks sibling entries in the same slot
   const renderEntryEjs = (content: string): string => (content.includes('<%') ? ejsRender(content) : content);
   const rawWiBefore = beforeCharLore.map((x) => renderEntryEjs(x.entry.content)).filter((s) => s.trim()).join('\n');
   const rawWiAfter = afterCharLore.map((x) => renderEntryEjs(x.entry.content)).filter((s) => s.trim()).join('\n');
-  const rawWiInChat = inChatLore.map((x) => renderEntryEjs(x.entry.content)).filter((s) => s.trim()).join('\n');
 
   const rawSlots = {
     worldInfoBefore: rawWiBefore,
@@ -212,7 +223,9 @@ export function assembleSessionStart(params: {
   };
 
   const parts: string[] = [];
-  let deferredPostHistory = '';
+  const allDepthBlocks: PositionedPromptBlock[] = [];
+  let deferredTrailingPostHistory = '';
+  let depthSeq = 0;
 
   if (preset) {
     // Pass raw slots so compilePreset evaluates EJS + macros exactly once in true prompt_order
@@ -220,8 +233,13 @@ export function assembleSessionStart(params: {
     if (compiled.staticText) {
       parts.push(compiled.staticText);
     }
-    if (config.enablePostHistoryInjection && compiled.postHistoryText) {
-      deferredPostHistory = compiled.postHistoryText;
+    if (config.enablePostHistoryInjection) {
+      for (const blk of compiled.depthBlocks) {
+        allDepthBlocks.push({ ...blk, seq: depthSeq++ });
+      }
+      if (compiled.trailingPostBlocks.length > 0) {
+        deferredTrailingPostHistory = compiled.trailingPostBlocks.join('\n\n');
+      }
     }
     Object.assign(ctx.vars, compiled.variables);
   } else {
@@ -240,11 +258,34 @@ export function assembleSessionStart(params: {
     if (wiAfter) parts.push(`[Additional World Info]\n${wiAfter}`);
     if (ex) parts.push(`[Dialogue Examples]\n${ex}`);
     if (config.enablePostHistoryInjection && card.postHistoryInstructions.trim()) {
-      deferredPostHistory = renderText(card.postHistoryInstructions).trim();
+      deferredTrailingPostHistory = renderText(card.postHistoryInstructions).trim();
     }
   }
 
-  // Strictly place Opening Scene (#0, respecting selected alternate greeting) and existing Story History BEFORE postHistoryText
+  // Render each `in_chat` lorebook entry individually (EJS -> Macro) and merge into the unified depth pool
+  for (const item of inChatLore) {
+    const rendered = renderText(item.entry.content).trim();
+    if (!rendered) continue;
+    allDepthBlocks.push({
+      text: rendered,
+      depth: item.entry.depth ?? 0,
+      role: item.entry.role ?? 'system',
+      order: item.entry.order,
+      seq: depthSeq++,
+    });
+  }
+
+  // Split unified In-Chat depth blocks around [Current Turn User Input] per official SillyTavern spec:
+  // - Depth >= 1: injected BEFORE the latest user message (depth desc -> user/assistant/system -> order asc)
+  // - Depth = 0:  injected AFTER the latest user message (user/assistant/system -> order asc)
+  const preUserDepthBlocks = allDepthBlocks
+    .filter((b) => b.depth >= 1)
+    .sort(compareInChatDepthBlocks);
+  const postUserDepthBlocks = allDepthBlocks
+    .filter((b) => b.depth <= 0)
+    .sort(compareInChatDepthBlocks);
+
+  // 1. Opening Scene (#0) + Prior Story History (turns up to second-to-last message)
   if (selectedGreeting) {
     parts.push(
       `[Turn #0 · Opening Scene (${card.name}) — Already Shown to ${ctx.user}; Continue Directly From Here]\n${renderText(selectedGreeting)}`,
@@ -255,11 +296,9 @@ export function assembleSessionStart(params: {
     parts.push(resumedStoryBlock.trim());
   }
 
-  if (rawWiInChat) {
-    const renderedInChat = renderText(rawWiInChat).trim();
-    if (renderedInChat) {
-      parts.push(renderedInChat);
-    }
+  // 2. Depth >= 1 In-Chat injections (World Info @D>=1 + Preset @D>=1), live state, and Author's Note
+  if (preUserDepthBlocks.length > 0) {
+    parts.push(preUserDepthBlocks.map((b) => b.text).join('\n'));
   }
 
   const compactState = formatCompactState(session.state, card.name);
@@ -272,9 +311,19 @@ export function assembleSessionStart(params: {
     parts.push(`[Author's Note]\n${renderText(config.authorsNote.trim())}`);
   }
 
-  // Pin post-history rules AFTER opening scene & prior story turns so WAVE_CONTEXT_END / output_contract sit at the true end
-  if (deferredPostHistory) {
-    parts.push(deferredPostHistory);
+  // 3. [Current Turn User Input] — strictly BEFORE Depth=0 injections and Post-History Instructions
+  if (trimmedCurrentUserInput) {
+    parts.push(`[Current Turn User Input]\n${trimmedCurrentUserInput}`);
+  }
+
+  // 4. Depth = 0 In-Chat injections (World Info @D0 + Preset @D0), sorted by Role (user -> assistant -> system) + order asc
+  if (postUserDepthBlocks.length > 0) {
+    parts.push(postUserDepthBlocks.map((b) => b.text).join('\n'));
+  }
+
+  // 5. Relative blocks below `chatHistory` (Post-History Instructions / JB / Assistant Prefill) — true tail anchor
+  if (deferredTrailingPostHistory) {
+    parts.push(deferredTrailingPostHistory);
   }
 
   // Optional Memory Plugin contract: instruct the model to append a concise ~200-char <memory_summary>

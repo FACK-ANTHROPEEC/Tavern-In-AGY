@@ -12,6 +12,8 @@ export interface LorebookEntry {
   order: number;
   position: 'before_char' | 'after_char' | 'in_chat';
   depth?: number;
+  /** SillyTavern in-chat injection role (0=system, 1=user, 2=assistant) */
+  role?: 'system' | 'user' | 'assistant';
   caseSensitive?: boolean;
   matchWholeWords?: boolean;
   excludeRecursion?: boolean;

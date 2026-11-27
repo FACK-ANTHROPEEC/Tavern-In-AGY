@@ -28,6 +28,12 @@ function mapPosition(pos: unknown): 'before_char' | 'after_char' | 'in_chat' {
   return 'after_char';
 }
 
+function mapRole(role: unknown): 'system' | 'user' | 'assistant' {
+  if (role === 1 || role === 'user') return 'user';
+  if (role === 2 || role === 'assistant') return 'assistant';
+  return 'system';
+}
+
 function pickOptionalBool(...values: unknown[]): boolean | undefined {
   for (const v of values) {
     if (typeof v === 'boolean') return v;
@@ -84,6 +90,7 @@ export function parseLorebookJson(
         : typeof ext.depth === 'number'
           ? ext.depth
           : undefined;
+    const rawRole = ext.role !== undefined && ext.role !== null ? ext.role : e.role;
 
     return {
       uid,
@@ -98,6 +105,7 @@ export function parseLorebookJson(
       order: Number(e.order ?? e.insertion_order ?? 100),
       position: mapPosition(rawPos),
       depth,
+      role: mapRole(rawRole),
       caseSensitive: pickOptionalBool(
         e.caseSensitive,
         e.case_sensitive,
