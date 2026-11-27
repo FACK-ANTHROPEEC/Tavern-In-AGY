@@ -6,6 +6,7 @@ tools:
   - invoke_subagent
   - manage_subagents
   - send_message
+  - call_mcp_tool
 ---
 
 # Single-Window Story Director (`story-director`)

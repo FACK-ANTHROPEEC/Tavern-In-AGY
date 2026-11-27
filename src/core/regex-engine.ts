@@ -96,8 +96,14 @@ export function applyRegexScripts(
 
     let patternStr = script.findRegex;
     if (opts.macroCtx && (script.substituteRegex === 1 || script.substituteRegex === 2)) {
-      const evaluated = evaluateMacros(patternStr, opts.macroCtx);
-      patternStr = script.substituteRegex === 2 ? escapeRegexChars(evaluated) : evaluated;
+      if (script.substituteRegex === 2) {
+        // ESCAPED mode: escape ONLY the macro replacement values, preserving regex metacharacters in findRegex
+        patternStr = patternStr.replace(/\{\{[^{}]+\}\}/g, (macroToken) =>
+          escapeRegexChars(evaluateMacros(macroToken, opts.macroCtx!)),
+        );
+      } else {
+        patternStr = evaluateMacros(patternStr, opts.macroCtx);
+      }
     }
 
     const regex = parseStRegex(patternStr);
@@ -109,14 +115,18 @@ export function applyRegexScripts(
     try {
       text = text.replace(regex, (...args: unknown[]) => {
         const fullMatch = String(args[0] ?? '');
-        // Extract positional capture groups (before offset & source string)
+        const lastArg = args[args.length - 1];
+        const namedGroups: Record<string, string | undefined> | null =
+          lastArg && typeof lastArg === 'object' ? (lastArg as Record<string, string | undefined>) : null;
+        const positionalEnd = namedGroups ? args.length - 3 : args.length - 2;
+
+        // Extract positional capture groups (before offset, source string, and optional named groups)
         const groups: string[] = [];
-        for (let i = 1; i < args.length - 2; i++) {
+        for (let i = 1; i < positionalEnd; i++) {
           const g = args[i];
           if (typeof g === 'string') {
             groups.push(applyTrimStrings(g, trimStrings));
           } else if (typeof g === 'number') {
-            // Reached offset argument
             break;
           } else {
             groups.push('');
@@ -124,17 +134,31 @@ export function applyRegexScripts(
         }
 
         const trimmedMatch = applyTrimStrings(fullMatch, trimStrings);
-        let replaced = rawReplace.replace(/\{\{match\}\}/gi, trimmedMatch);
 
-        // Replace $1..$99 and $<name> capture references
-        replaced = replaced.replace(/\$(\d{1,2}|\&)/g, (tok, ref: string) => {
-          if (ref === '&') return trimmedMatch;
-          const idx = Number(ref) - 1;
-          if (idx >= 0 && idx < groups.length) {
-            return groups[idx] ?? '';
-          }
-          return tok;
-        });
+        // Single-pass replacement on rawReplace so `$` sequences inside matched prose are never re-interpreted,
+        // `$$` unescapes to literal `$`, `$&` / `{{match}}` resolve safely, and `$<name>` named captures work.
+        let replaced = rawReplace.replace(
+          /\{\{match\}\}|\$\$|\$&|\$<([^>]+)>|\$(\d{1,2})/gi,
+          (tok, namedRef: string | undefined, numRef: string | undefined) => {
+            if (tok.toLowerCase() === '{{match}}') return trimmedMatch;
+            if (tok === '$$') return '$';
+            if (tok === '$&') return trimmedMatch;
+            if (namedRef !== undefined) {
+              if (namedGroups && Object.prototype.hasOwnProperty.call(namedGroups, namedRef)) {
+                return applyTrimStrings(String(namedGroups[namedRef] ?? ''), trimStrings);
+              }
+              return tok;
+            }
+            if (numRef !== undefined) {
+              const idx = Number(numRef) - 1;
+              if (idx >= 0 && idx < groups.length) {
+                return groups[idx] ?? '';
+              }
+              return tok;
+            }
+            return tok;
+          },
+        );
 
         if (opts.macroCtx && replaced.includes('{{')) {
           replaced = evaluateMacros(replaced, opts.macroCtx);
@@ -265,11 +289,26 @@ export function foldUnknownCustomTags(
 /**
  * Strips potentially executable attributes/tags from static HTML fragments
  * intended for inline native rendering (e.g. `<details><summary>...</summary></details>`).
+ * Defends against slash-separated attributes (`<img src=x/onerror=...>`, `<svg/onload=...>`),
+ * embedded active containers (`<iframe>`, `<object>`, `<embed>`), and entity-encoded `javascript:` URIs.
  */
 export function sanitizeStaticHtml(html: string): string {
   return html
-    .replace(/<script\b[\s\S]*?<\/script>/gi, '')
-    .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/<(script|iframe|object|embed)\b[\s\S]*?(?:<\/\1>|\/?>)/gi, '')
+    .replace(/<(iframe|object|embed)\b[^>]*>/gi, '')
+    .replace(/[\s/]+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/(?:href|src|xlink:href|formaction|action)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi, (full, d?: string, s?: string, u?: string) => {
+      const val = d ?? s ?? u ?? '';
+      const decoded = val
+        .replace(/&#x([0-9a-f]+);?/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+        .replace(/&#(\d+);?/g, (_, dec: string) => String.fromCharCode(parseInt(dec, 10)))
+        .replace(/[\u0000-\u0020]+/g, '')
+        .toLowerCase();
+      if (decoded.startsWith('javascript:') || decoded.startsWith('vbscript:') || decoded.startsWith('data:text/html')) {
+        return '';
+      }
+      return full;
+    })
     .replace(/javascript:/gi, '');
 }
 
@@ -279,7 +318,8 @@ function needsSandboxWidget(html: string): boolean {
     /<html\b/i.test(html) ||
     /<script\b/i.test(html) ||
     /<style\b/i.test(html) ||
-    /\son[a-z]+\s*=/i.test(html)
+    /<(?:iframe|object|embed)\b/i.test(html) ||
+    /[\s/]+on[a-z]+\s*=/i.test(html)
   );
 }
 

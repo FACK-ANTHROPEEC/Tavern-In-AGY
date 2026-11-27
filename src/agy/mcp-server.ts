@@ -114,17 +114,17 @@ function syncSessionToStoryKey(config: TavernConfig, storyKey: string): void {
   storage.saveSession(session);
 }
 
-function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
+function buildBootstrapPayload(opts?: { omitAvatars?: boolean; slimForPanelOpen?: boolean }) {
   const config = storage.getConfig();
   const cards = storage.listCards();
   const presets = storage.listPresets();
   const lorebooks = storage.listLorebooks();
-  const snapshots = storage.listSnapshots();
+  const snapshots = opts?.slimForPanelOpen ? [] : storage.listSnapshots();
   const session = storage.getSession(DEFAULT_SESSION_ID);
   const cardId = config.activeCardId || 'default';
   const activeChatSlot = config.activeChatSlots?.[cardId] || 'default';
   const storyKey = resolveStoryKey(cardId, activeChatSlot);
-  const storyTurns = storyLog.readTurns(storyKey);
+  const storyTurns = opts?.slimForPanelOpen ? [] : storyLog.readTurns(storyKey);
   const chatSlots = config.activeCardId ? storyLog.listSlots(config.activeCardId, activeChatSlot) : [];
 
   const activeCardObj = config.activeCardId ? cards.find((c) => c.id === config.activeCardId) : undefined;
@@ -143,7 +143,7 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean }) {
       const isActiveCard = c.id === config.activeCardId;
       let avatarDataUrl: string | undefined;
       if (!opts?.omitAvatars && c.avatarDataUrl) {
-        if (c.avatarDataUrl.length <= 64_000 || isActiveCard || c.avatarDataUrl.length <= remainingAvatarBudget) {
+        if (c.avatarDataUrl.length <= remainingAvatarBudget || (isActiveCard && c.avatarDataUrl.length <= 256_000)) {
           avatarDataUrl = c.avatarDataUrl;
           remainingAvatarBudget = Math.max(0, remainingAvatarBudget - c.avatarDataUrl.length);
         }
@@ -322,7 +322,7 @@ server.registerTool(
     },
   },
   async () => {
-    const payload = buildBootstrapPayload({ omitAvatars: true });
+    const payload = buildBootstrapPayload({ omitAvatars: true, slimForPanelOpen: true });
     const activeCard = payload.cards.find((c) => c.id === payload.config.activeCardId);
     const activePreset = payload.presets.find((p) => p.id === payload.config.activePresetId);
     return {
@@ -379,7 +379,8 @@ server.registerTool(
   },
   async (args) => {
     const config = storage.getConfig();
-    const session = storage.getSession(args.conversationId || DEFAULT_SESSION_ID);
+    // Always use the shared canonical session store ('default') so UI, hooks, and subagents never split-brain
+    const session = storage.getSession(DEFAULT_SESSION_ID);
     const st = session.state;
 
     const toNum = (v: number | string | null | undefined): number | undefined => {
@@ -534,7 +535,8 @@ server.registerTool(
     },
   },
   async (args) => {
-    const session = storage.getSession(args.conversationId || DEFAULT_SESSION_ID);
+    // Always write to canonical shared 'default' session so UI and hooks stay consistent
+    const session = storage.getSession(DEFAULT_SESSION_ID);
     const st = session.state;
     if (args.location !== undefined) st.location = args.location;
     if (args.timeOfDay !== undefined) st.timeOfDay = args.timeOfDay;
@@ -1378,18 +1380,10 @@ server.registerTool(
   async ({ turnId, inclusive }) => {
     const config = storage.getConfig();
     const storyKey = getActiveStoryKey(config);
-    const kept = storyLog.rollbackToTurn(storyKey, turnId, inclusive);
+    storyLog.rollbackToTurn(storyKey, turnId, inclusive);
 
-    // Restore MVU stat_data to the exact rolled-back floor!
-    const session = storage.getSession(DEFAULT_SESSION_ID);
-    const lastKept = kept[kept.length - 1];
-    if (lastKept?.statData) {
-      session.statData = lastKept.statData;
-    } else if (config.activeCardId) {
-      const card = storage.getCard(config.activeCardId);
-      session.statData = card ? initCardMvuIfEmpty(card, config.userName || 'User') : {};
-    }
-    storage.saveSession(session);
+    // Restore MVU stat_data (including alternate greeting index), live state, and latestOptions atomically
+    syncSessionToStoryKey(config, storyKey);
 
     return {
       content: [{ type: 'text', text: 'story and stat_data rolled back' }],

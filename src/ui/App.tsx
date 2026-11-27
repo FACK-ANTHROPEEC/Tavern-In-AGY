@@ -630,13 +630,18 @@ export function AppView() {
     return `${activeCard?.id ?? ''}|${activePreset?.id ?? ''}|${cardPart}|${presetPart}`;
   }, [activeCard, activePreset]);
 
+  // Clear manually loaded cardFrontend only when switching active card
+  useEffect(() => {
+    setCardFrontend(null);
+    setMvuSchemaCount(0);
+  }, [activeCard?.id]);
+
   // Auto-load card/preset helper scripts in the background so MVU Zod schemas register automatically
   useEffect(() => {
     const hasAnyHelper =
       Boolean(activeCard?.hasHelperScripts) ||
       Boolean(activePreset?.helperScripts?.some((s) => s.enabled));
     if (!activeCard || !hasAnyHelper) {
-      setCardFrontend(null);
       setMvuSchemaCount(0);
       return;
     }
@@ -659,7 +664,9 @@ export function AppView() {
     return () => {
       cancelled = true;
     };
-  }, [enabledHelperSig, activeCard?.id, activeCard?.hasHelperScripts, activePreset]);
+    // Depend ONLY on primitive enabledHelperSig (includes cardId, presetId, and enabled script lists)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabledHelperSig]);
 
   const handleSilentStatUpdate = useCallback((nextStat: Record<string, unknown>) => {
     callTool('story_app_set_stat_data', { statData: nextStat });

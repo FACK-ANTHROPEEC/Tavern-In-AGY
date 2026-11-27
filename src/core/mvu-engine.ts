@@ -250,6 +250,137 @@ export interface MvuUpdateResult {
 }
 
 /**
+ * Quote-aware balanced `[...]` extractor so nested JSONPatch values like
+ * `[{"op":"replace","path":"/bag","value":[{"name":"sword"}]}]` are never truncated at inner `}]`.
+ */
+function extractBalancedJsonArray(body: string): string | null {
+  let searchFrom = 0;
+  while (searchFrom < body.length) {
+    const start = body.indexOf('[', searchFrom);
+    if (start === -1) return null;
+    const afterStart = body.slice(start + 1).trimStart();
+    if (!afterStart.startsWith('{')) {
+      searchFrom = start + 1;
+      continue;
+    }
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < body.length; i++) {
+      const ch = body[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === '\\') {
+          escaped = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+      } else if (ch === '[') {
+        depth += 1;
+      } else if (ch === ']') {
+        depth -= 1;
+        if (depth === 0) {
+          return body.slice(start, i + 1);
+        }
+      }
+    }
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Quote- and bracket-aware extractor for `_.set(...)`, `_.add(...)`, `_.unset(...)`, `_.assign(...)`.
+ * Correctly handles string arguments containing `)`, `;`, `,`, or nested objects/arrays.
+ */
+function extractLodashCalls(body: string, fnName: 'set' | 'add' | 'unset' | 'assign'): string[][] {
+  const results: string[][] = [];
+  const prefixRe = new RegExp(`_\\.${fnName}\\s*\\(`, 'g');
+  let m: RegExpExecArray | null;
+
+  while ((m = prefixRe.exec(body)) !== null) {
+    const argStart = m.index + m[0].length;
+    let depthParen = 1;
+    let depthBrace = 0;
+    let depthBracket = 0;
+    let quote: string | null = null;
+    let escaped = false;
+    const args: string[] = [];
+    let cur = '';
+    let closed = false;
+
+    for (let i = argStart; i < body.length; i++) {
+      const ch = body[i];
+      if (quote) {
+        cur += ch;
+        if (escaped) {
+          escaped = false;
+        } else if (ch === '\\') {
+          escaped = true;
+        } else if (ch === quote) {
+          quote = null;
+        }
+        continue;
+      }
+      if (ch === '\'' || ch === '"' || ch === '`') {
+        quote = ch;
+        cur += ch;
+        continue;
+      }
+      if (ch === '(') {
+        depthParen += 1;
+        cur += ch;
+      } else if (ch === ')') {
+        depthParen -= 1;
+        if (depthParen === 0) {
+          if (cur.trim()) args.push(cur.trim());
+          closed = true;
+          prefixRe.lastIndex = i + 1;
+          break;
+        }
+        cur += ch;
+      } else if (ch === '{') {
+        depthBrace += 1;
+        cur += ch;
+      } else if (ch === '}') {
+        depthBrace = Math.max(0, depthBrace - 1);
+        cur += ch;
+      } else if (ch === '[') {
+        depthBracket += 1;
+        cur += ch;
+      } else if (ch === ']') {
+        depthBracket = Math.max(0, depthBracket - 1);
+        cur += ch;
+      } else if (ch === ',' && depthParen === 1 && depthBrace === 0 && depthBracket === 0) {
+        args.push(cur.trim());
+        cur = '';
+      } else {
+        cur += ch;
+      }
+    }
+
+    if (closed && args.length > 0) {
+      results.push(args);
+    }
+  }
+
+  return results;
+}
+
+function unquoteStringArg(raw: string): string | null {
+  const t = raw.trim();
+  if (t.length >= 2 && ((t.startsWith("'") && t.endsWith("'")) || (t.startsWith('"') && t.endsWith('"')))) {
+    return t.slice(1, -1).replace(/\\(['"\\])/g, '$1');
+  }
+  return null;
+}
+
+/**
  * Parses `<update>...</update>` and `<UpdateVariable>...</UpdateVariable>` blocks
  * containing RFC 6902 JSON Patch arrays or `_.set` / `_.assign` statements,
  * applies them to `stat_data` with `_` readonly protection, and returns cleaned narrative prose.
@@ -268,15 +399,15 @@ export function applyMvuUpdates(
   while ((match = blockRegex.exec(text)) !== null) {
     const body = match[1];
 
-    // 1. Try <JSONPatch> / <json_patch> or raw JSON array inside block
-    const jsonPatchMatch =
-      body.match(/<json_?patch>([\s\S]*?)<\/json_?patch>/i) ??
-      body.match(/```(?:json)?\s*(\[[\s\S]*?\])\s*```/i) ??
-      body.match(/(\[\s*\{[\s\S]*?\}\s*\])/);
+    // 1. Try <JSONPatch> / <json_patch>, fenced json array, or balanced raw JSON array inside block
+    const jsonPatchRaw =
+      body.match(/<json_?patch>([\s\S]*?)<\/json_?patch>/i)?.[1] ??
+      body.match(/```(?:json)?\s*(\[[\s\S]*?\])\s*```/i)?.[1] ??
+      extractBalancedJsonArray(body);
 
-    if (jsonPatchMatch) {
+    if (jsonPatchRaw) {
       try {
-        const ops = JSON.parse(jsonPatchMatch[1].trim());
+        const ops = JSON.parse(jsonPatchRaw.trim());
         if (Array.isArray(ops)) {
           for (const rawOp of ops) {
             if (
@@ -296,17 +427,17 @@ export function applyMvuUpdates(
       }
     }
 
-    // 2. Support MVU `_.set('path', value)` statements
-    const setRegex = /_\.set\(\s*['"]([^'"]+)['"]\s*,\s*([^;\n)]+)\s*\)/g;
-    let setMatch: RegExpExecArray | null;
-    while ((setMatch = setRegex.exec(body)) !== null) {
-      const dotPath = setMatch[1].trim();
+    // 2. Support MVU `_.set('path', value)` statements (quote- & paren-safe)
+    for (const args of extractLodashCalls(body, 'set')) {
+      if (args.length < 2) continue;
+      const dotPath = unquoteStringArg(args[0])?.trim();
+      if (!dotPath) continue;
       const segs = dotPath.split('.');
       if (hasReadonlyUnderscoreSegment(segs)) {
         rejectedPaths.push(dotPath);
         continue;
       }
-      const parsed = parseLiteralValue(setMatch[2]);
+      const parsed = parseLiteralValue(args[1]);
       if (parsed.ok) {
         setByDotPath(next, dotPath, parsed.value);
         appliedCount += 1;
@@ -314,16 +445,16 @@ export function applyMvuUpdates(
     }
 
     // 3. Support MVU `_.add('path', delta)` statements
-    const addRegex = /_\.add\(\s*['"]([^'"]+)['"]\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/g;
-    let addMatch: RegExpExecArray | null;
-    while ((addMatch = addRegex.exec(body)) !== null) {
-      const dotPath = addMatch[1].trim();
+    for (const args of extractLodashCalls(body, 'add')) {
+      if (args.length < 2) continue;
+      const dotPath = unquoteStringArg(args[0])?.trim();
+      const delta = Number(args[1]);
+      if (!dotPath || !Number.isFinite(delta)) continue;
       const segs = dotPath.split('.');
       if (hasReadonlyUnderscoreSegment(segs)) {
         rejectedPaths.push(dotPath);
         continue;
       }
-      const delta = Number(addMatch[2]);
       const curVal = getByDotPath(next, dotPath);
       const baseNum = typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : Number(curVal) || 0;
       setByDotPath(next, dotPath, baseNum + delta);
@@ -331,10 +462,10 @@ export function applyMvuUpdates(
     }
 
     // 4. Support MVU `_.unset('path')` statements
-    const unsetRegex = /_\.unset\(\s*['"]([^'"]+)['"]\s*\)/g;
-    let unsetMatch: RegExpExecArray | null;
-    while ((unsetMatch = unsetRegex.exec(body)) !== null) {
-      const dotPath = unsetMatch[1].trim();
+    for (const args of extractLodashCalls(body, 'unset')) {
+      if (args.length < 1) continue;
+      const dotPath = unquoteStringArg(args[0])?.trim();
+      if (!dotPath) continue;
       const segs = dotPath.split('.');
       if (hasReadonlyUnderscoreSegment(segs)) {
         rejectedPaths.push(dotPath);
@@ -345,47 +476,45 @@ export function applyMvuUpdates(
       }
     }
 
-    // 5. Support MVU `_.assign('path', keyOrObj[, val])` statements
-    const assignRegex = /_\.assign\(\s*['"]([^'"]+)['"]\s*,\s*([^\n;]+?)\s*\)/g;
-    let assignMatch: RegExpExecArray | null;
-    while ((assignMatch = assignRegex.exec(body)) !== null) {
-      const dotPath = assignMatch[1].trim();
+    // 5. Support MVU `_.assign('path', obj)` or `_.assign('path', 'key', val)` statements (quote- & paren-safe)
+    for (const args of extractLodashCalls(body, 'assign')) {
+      if (args.length < 2) continue;
+      const dotPath = unquoteStringArg(args[0])?.trim();
+      if (!dotPath) continue;
       const segs = dotPath.split('.');
       if (hasReadonlyUnderscoreSegment(segs)) {
         rejectedPaths.push(dotPath);
         continue;
       }
-      const rest = assignMatch[2].trim();
-      const parsedObj = parseLiteralValue(rest);
-      if (parsedObj.ok && parsedObj.value && typeof parsedObj.value === 'object' && !Array.isArray(parsedObj.value)) {
-        const existing = getByDotPath(next, dotPath);
-        const targetObj =
-          existing && typeof existing === 'object' && !Array.isArray(existing)
-            ? (existing as Record<string, unknown>)
-            : {};
-        for (const [k, v] of Object.entries(parsedObj.value as Record<string, unknown>)) {
-          if (k.startsWith('_')) {
-            rejectedPaths.push(`${dotPath}.${k}`);
-            continue;
+      if (args.length === 2) {
+        const parsedObj = parseLiteralValue(args[1]);
+        if (parsedObj.ok && parsedObj.value && typeof parsedObj.value === 'object' && !Array.isArray(parsedObj.value)) {
+          const existing = getByDotPath(next, dotPath);
+          const targetObj =
+            existing && typeof existing === 'object' && !Array.isArray(existing)
+              ? (existing as Record<string, unknown>)
+              : {};
+          for (const [k, v] of Object.entries(parsedObj.value as Record<string, unknown>)) {
+            if (k.startsWith('_')) {
+              rejectedPaths.push(`${dotPath}.${k}`);
+              continue;
+            }
+            targetObj[k] = v;
           }
-          targetObj[k] = v;
+          setByDotPath(next, dotPath, targetObj);
+          appliedCount += 1;
         }
-        setByDotPath(next, dotPath, targetObj);
-        appliedCount += 1;
-      } else {
-        // Two-arg form: _.assign('path', 'key', value)
-        const kvMatch = rest.match(/^['"]([^'"]+)['"]\s*,\s*([\s\S]+)$/);
-        if (kvMatch) {
-          const key = kvMatch[1].trim();
-          if (key.startsWith('_')) {
-            rejectedPaths.push(`${dotPath}.${key}`);
-            continue;
-          }
-          const parsedVal = parseLiteralValue(kvMatch[2]);
-          if (parsedVal.ok) {
-            setByDotPath(next, `${dotPath}.${key}`, parsedVal.value);
-            appliedCount += 1;
-          }
+      } else if (args.length >= 3) {
+        const key = unquoteStringArg(args[1])?.trim();
+        if (!key) continue;
+        if (key.startsWith('_')) {
+          rejectedPaths.push(`${dotPath}.${key}`);
+          continue;
+        }
+        const parsedVal = parseLiteralValue(args[2]);
+        if (parsedVal.ok) {
+          setByDotPath(next, `${dotPath}.${key}`, parsedVal.value);
+          appliedCount += 1;
         }
       }
     }

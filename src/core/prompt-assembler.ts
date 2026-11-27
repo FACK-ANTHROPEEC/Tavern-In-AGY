@@ -177,24 +177,25 @@ export function assembleSessionStart(params: {
     injectedLorebookTurns: {},
   });
 
-  const wiBefore = scan.constantBefore.map((x) => renderText(x.entry.content)).filter((s) => s.trim()).join('\n\n');
-  const wiAfter = scan.constantAfter.map((x) => renderText(x.entry.content)).filter((s) => s.trim()).join('\n\n');
+  const rawWiBefore = scan.constantBefore.map((x) => x.entry.content).filter((s) => s.trim()).join('\n\n');
+  const rawWiAfter = scan.constantAfter.map((x) => x.entry.content).filter((s) => s.trim()).join('\n\n');
 
-  const slots = {
-    worldInfoBefore: wiBefore,
+  const rawSlots = {
+    worldInfoBefore: rawWiBefore,
     personaDescription: config.userPersona,
-    charDescription: renderText(card.description),
-    charPersonality: renderText(card.personality),
-    scenario: renderText(card.scenario),
-    worldInfoAfter: wiAfter,
-    dialogueExamples: renderText(card.messageExample),
+    charDescription: card.description,
+    charPersonality: card.personality,
+    scenario: card.scenario,
+    worldInfoAfter: rawWiAfter,
+    dialogueExamples: card.messageExample,
   };
 
   const parts: string[] = [];
   let deferredPostHistory = '';
 
   if (preset) {
-    const compiled = compilePreset(preset, ctx, slots, { ejsRender });
+    // Pass raw slots so compilePreset evaluates EJS + macros exactly once in true prompt_order
+    const compiled = compilePreset(preset, ctx, rawSlots, { ejsRender });
     if (compiled.staticText) {
       parts.push(compiled.staticText);
     }
@@ -203,14 +204,20 @@ export function assembleSessionStart(params: {
     }
     Object.assign(ctx.vars, compiled.variables);
   } else {
+    const wiBefore = renderText(rawWiBefore);
+    const wiAfter = renderText(rawWiAfter);
+    const charDesc = renderText(card.description);
+    const charPers = renderText(card.personality);
+    const scen = renderText(card.scenario);
+    const ex = renderText(card.messageExample);
     if (wiBefore) parts.push(`[World Info]\n${wiBefore}`);
     if (card.systemPrompt) parts.push(renderText(card.systemPrompt));
-    if (slots.charDescription) parts.push(`[Character: ${card.name}]\n${slots.charDescription}`);
-    if (slots.charPersonality) parts.push(`[Personality]\n${slots.charPersonality}`);
-    if (slots.scenario) parts.push(`[Scenario]\n${slots.scenario}`);
+    if (charDesc) parts.push(`[Character: ${card.name}]\n${charDesc}`);
+    if (charPers) parts.push(`[Personality]\n${charPers}`);
+    if (scen) parts.push(`[Scenario]\n${scen}`);
     if (config.userPersona) parts.push(`[User Persona: ${ctx.user}]\n${renderText(config.userPersona)}`);
     if (wiAfter) parts.push(`[Additional World Info]\n${wiAfter}`);
-    if (slots.dialogueExamples) parts.push(`[Dialogue Examples]\n${slots.dialogueExamples}`);
+    if (ex) parts.push(`[Dialogue Examples]\n${ex}`);
     if (config.enablePostHistoryInjection && card.postHistoryInstructions.trim()) {
       deferredPostHistory = renderText(card.postHistoryInstructions).trim();
     }

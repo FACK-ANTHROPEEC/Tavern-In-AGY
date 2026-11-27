@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ChatSlotSummary, MemoryPluginConfig, RegexScript, StoryTurn } from './types.js';
 import { applyRegexScripts } from './regex-engine.js';
+import { renameWithRetry } from './storage.js';
 import {
   buildFallbackSummary,
   extractMemorySummary,
@@ -159,7 +160,21 @@ export class StoryLogStore {
       createdAt: new Date().toISOString(),
     };
     const p = this.filePath(storyKey);
-    fs.appendFileSync(p, JSON.stringify(turn) + '\n', 'utf8');
+    let prefix = '';
+    if (fs.existsSync(p)) {
+      const stat = fs.statSync(p);
+      if (stat.size > 0) {
+        const fd = fs.openSync(p, 'r');
+        try {
+          const buf = Buffer.alloc(1);
+          fs.readSync(fd, buf, 0, 1, stat.size - 1);
+          if (buf[0] !== 0x0a) prefix = '\n';
+        } finally {
+          fs.closeSync(fd);
+        }
+      }
+    }
+    fs.appendFileSync(p, prefix + JSON.stringify(turn) + '\n', 'utf8');
     return turn;
   }
 
@@ -399,6 +414,6 @@ export class StoryLogStore {
     const tmp = `${p}.${nonce}.tmp`;
     const body = turns.map((t) => JSON.stringify(t)).join('\n') + (turns.length ? '\n' : '');
     fs.writeFileSync(tmp, body, 'utf8');
-    fs.renameSync(tmp, p);
+    renameWithRetry(tmp, p);
   }
 }

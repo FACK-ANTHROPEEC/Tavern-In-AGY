@@ -55,14 +55,12 @@ export function handlePreInvocation(
 
   const convId = payload.conversationId || 'default';
   const session = storage.getSession(convId);
+  const shared = convId === 'default' ? session : storage.getSession('default');
 
   // Sync latest live state & MVU statData written by MCP server ('default' shared store)
   if (convId !== 'default') {
-    const shared = storage.getSession('default');
     session.state = { ...session.state, ...shared.state };
-    if (shared.statData && Object.keys(shared.statData).length > 0) {
-      session.statData = { ...shared.statData };
-    }
+    session.statData = { ...(shared.statData ?? {}) };
   }
 
   // In Director Mode, story-writer subagent sessions are unlocked by SessionStart and marked `isWriterSubagent`.
@@ -86,8 +84,6 @@ export function handlePreInvocation(
   // story-writer subagent per turn. Never inject RP prose/lore into the main window; cache the user input
   // with a 5-min TTL so the spawned story-writer subagent's SessionStart unlocks and injects full context.
   if (config.directorMode) {
-    const shared = storage.getSession('default');
-
     // Reactive wakeup after story-writer finishes (invocationNum resets to 1 while lastUserInput is unchanged):
     // if this exact turn was already claimed by the writer (pendingDirectorInput consumed) or committed,
     // reset state to 'idle' and return {} so the director wraps up instead of dispatching a duplicate writer.
@@ -105,9 +101,11 @@ export function handlePreInvocation(
     shared.pendingDirectorInput = lastUserInput;
     shared.pendingDirectorInputAt = Date.now();
     shared.lastUserInputForCommit = lastUserInput;
-    storage.saveSession(shared);
     session.lastUserInputHash = inputHash;
-    storage.saveSession(session);
+    storage.saveSession(shared);
+    if (convId !== 'default') {
+      storage.saveSession(session);
+    }
     return {
       injectSteps: [
         {

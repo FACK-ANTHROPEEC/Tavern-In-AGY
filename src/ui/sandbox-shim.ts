@@ -309,13 +309,18 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
   }
 
   function getVariables(){
-    return Object.assign({ stat_data: STAT }, STAT);
+    const snap = cloneDeep(STAT);
+    return Object.assign({ stat_data: snap }, snap);
   }
   function getAllVariables(){
     return getVariables();
   }
   function pushStatUpdate(nextStat){
-    STAT = cloneDeep(nextStat || {});
+    const cleaned = cloneDeep(nextStat || {});
+    if (cleaned && typeof cleaned === 'object' && Object.prototype.hasOwnProperty.call(cleaned, 'stat_data')) {
+      delete cleaned.stat_data;
+    }
+    STAT = cleaned;
     try {
       window.parent.postMessage({ widgetId: WID, type: 'tavern:updateStat', statData: STAT }, '*');
     } catch(e){}
@@ -328,15 +333,26 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
     return getVariables();
   }
   function insertOrAssignVariables(patch){
-    const merged = mergeDeep(cloneDeep(STAT), patch || {});
+    const raw = (patch && typeof patch === 'object' && patch.stat_data && typeof patch.stat_data === 'object') ? patch.stat_data : (patch || {});
+    const merged = mergeDeep(cloneDeep(STAT), raw);
     pushStatUpdate(merged);
     return getVariables();
   }
   function updateVariablesWith(updater){
-    const draft = getVariables();
+    const prevSnap = cloneDeep(STAT);
+    const prevJson = JSON.stringify(prevSnap);
+    const draft = Object.assign({ stat_data: cloneDeep(prevSnap) }, cloneDeep(prevSnap));
     try {
       const res = typeof updater === 'function' ? updater(draft) : draft;
-      return replaceVariables(res || draft);
+      const target = (res && typeof res === 'object') ? res : draft;
+      const topClone = cloneDeep(target);
+      const sd = (target.stat_data && typeof target.stat_data === 'object') ? cloneDeep(target.stat_data) : null;
+      delete topClone.stat_data;
+      // Prefer explicit stat_data edits when stat_data changed; otherwise honor top-level edits on draft
+      const sdChanged = sd !== null && JSON.stringify(sd) !== prevJson;
+      const nextStat = sdChanged ? sd : topClone;
+      pushStatUpdate(nextStat);
+      return getVariables();
     } catch(e){
       return getVariables();
     }
@@ -602,16 +618,24 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
     if (!body) return 0;
     const cs = window.getComputedStyle(body);
     const padBottom = parseFloat(cs.paddingBottom) || 0;
+    const scrollY = window.scrollY || window.pageYOffset || 0;
+    const vh = window.innerHeight || 0;
     let maxBottom = 0;
     for (let i = 0; i < body.children.length; i++){
       const el = body.children[i];
       const tag = el.tagName;
       if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'LINK') continue;
+      const ecs = window.getComputedStyle(el);
+      // Skip fixed overlays so they never cause viewport-height growth feedback loops
+      if (ecs.position === 'fixed') continue;
       const rect = el.getBoundingClientRect();
       if (rect.height > 0 || rect.width > 0) {
-        const ecs = window.getComputedStyle(el);
+        // Avoid feedback loop when an element stretches to 100vh of the iframe viewport
+        if (vh > 0 && Math.abs(rect.height - vh) <= 2 && /100vh|100dvh/i.test(el.getAttribute('style') || '')) {
+          continue;
+        }
         const mb = parseFloat(ecs.marginBottom) || 0;
-        maxBottom = Math.max(maxBottom, rect.bottom + mb);
+        maxBottom = Math.max(maxBottom, rect.bottom + scrollY + mb);
       }
     }
     if (maxBottom > 0) return Math.ceil(maxBottom + padBottom);

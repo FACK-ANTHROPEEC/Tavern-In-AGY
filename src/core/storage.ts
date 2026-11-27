@@ -26,21 +26,69 @@ function ensureDir(dir: string): void {
   }
 }
 
+function sleepSync(ms: number): void {
+  if (ms <= 0) return;
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      // fallback spin for environments without SharedArrayBuffer
+    }
+  }
+}
+
+/**
+ * Windows-safe atomic rename with brief retry backoff on transient EPERM/EACCES/EBUSY
+ * caused by concurrent MCP/hook processes or antivirus/indexer locks, plus guaranteed `.tmp` cleanup.
+ */
+export function renameWithRetry(tmpPath: string, filePath: string, maxAttempts = 6): void {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      fs.renameSync(tmpPath, filePath);
+      return;
+    } catch (err) {
+      lastErr = err;
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY') {
+        sleepSync(12 * (attempt + 1));
+        continue;
+      }
+      break;
+    }
+  }
+  try {
+    if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+  } catch {
+    // ignore cleanup failure
+  }
+  throw lastErr;
+}
+
 function writeJsonAtomic(filePath: string, data: unknown): void {
   ensureDir(path.dirname(filePath));
   const nonce = `${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 7)}`;
   const tmpPath = `${filePath}.${nonce}.tmp`;
   fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf8');
-  fs.renameSync(tmpPath, filePath);
+  renameWithRetry(tmpPath, filePath);
 }
 
 function readJsonSafe<T>(filePath: string): T | null {
   if (!fs.existsSync(filePath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8')) as T;
-  } catch {
-    return null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      return JSON.parse(fs.readFileSync(filePath, 'utf8')) as T;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (attempt < 3 && (code === 'EPERM' || code === 'EACCES' || code === 'EBUSY' || err instanceof SyntaxError)) {
+        sleepSync(10 * (attempt + 1));
+        continue;
+      }
+      return null;
+    }
   }
+  return null;
 }
 
 function safeId(id: string): string {

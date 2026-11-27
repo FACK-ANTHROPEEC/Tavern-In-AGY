@@ -47,12 +47,10 @@ export function handleSessionStart(
   const session = storage.getSession(convId);
   // Sync latest live state & MVU statData written by MCP server ('default' shared store)
   let pendingDirectorInput = '';
-  const shared = storage.getSession('default');
+  const shared = convId === 'default' ? session : storage.getSession('default');
   if (convId !== 'default') {
     session.state = { ...session.state, ...shared.state };
-    if (shared.statData && Object.keys(shared.statData).length > 0) {
-      session.statData = { ...shared.statData };
-    }
+    session.statData = { ...(shared.statData ?? {}) };
   }
 
   // In Director Mode, the main window (tavern-director) opens BEFORE any user message is sent,
