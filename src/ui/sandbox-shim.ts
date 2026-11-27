@@ -55,9 +55,30 @@ export function parseSlashCommandToMessage(rawCmd: string): string | null {
 }
 
 /**
+ * Wraps card/preset helper scripts into safe async IIFEs for an isolated iframe stage,
+ * stripping external CDN static `import 'https://...'` lines (since the local sandbox shim
+ * already provides `window.z` (Zod v4), `window.Mvu`, `window.registerMvuSchema`, and `window._`).
+ */
+export function buildHelperScriptsStageHtml(
+  scripts: Array<{ name: string; content: string }>,
+): string {
+  const scriptTags = scripts
+    .map((sc) => {
+      const sanitized = sc.content
+        .replace(/^\s*import\s+(?:[^'"]+\s+from\s+)?['"]https?:\/\/[^'"]+['"]\s*;?\s*$/gm, '// [local Mvu/Zod runtime active]')
+        .replace(/<\/script>/gi, '<\\/script>');
+      const safeName = sc.name.replace(/-->/g, '').replace(/\r?\n/g, ' ');
+      return `<script>\n// ${safeName}\n(async function(){\ntry {\n${sanitized}\n} catch (e) { console.error('[HelperScript:' + ${JSON.stringify(safeName)} + ']', e); }\n})();\n</script>`;
+    })
+    .join('\n');
+  return `<div id="tavern-helper-stage" style="min-height:1px;position:relative;"></div>\n${scriptTags}`;
+}
+
+/**
  * Builds a self-contained HTML `srcDoc` with a rich, CSP-safe runtime shim supporting
  * `getCurrentMessageId()`, range-aware `getChatMessages(range)`, `getLastMessageId()`,
- * `triggerSlash('/send ...' | '/setinput ...')`, `replaceVariables`, `_` (lodash), and `toastr`.
+ * `triggerSlash('/send ...' | '/setinput ...')`, `replaceVariables`, `_` (lodash), `toastr`,
+ * `window.z` (Zod v4), `window.Mvu`, `registerMvuSchema`, and `waitGlobalInitialized`.
  */
 export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions): string {
   const chatMessages = (opts.storyTurns ?? []).map((t) => ({
@@ -148,10 +169,42 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
     return target;
   }
 
+  function unsetByPath(obj, path){
+    if (obj == null || !path) return false;
+    const parts = Array.isArray(path) ? path : String(path).replace(/\\[(\\d+)\\]/g, '.$1').split('.').filter(Boolean);
+    let cur = obj;
+    for (let i = 0; i < parts.length - 1; i++){
+      if (cur == null || typeof cur !== 'object') return false;
+      cur = cur[parts[i]];
+    }
+    if (cur == null || typeof cur !== 'object' || parts.length === 0) return false;
+    const last = parts[parts.length - 1];
+    if (Array.isArray(cur)) {
+      const idx = Number(last);
+      if (Number.isNaN(idx) || idx < 0 || idx >= cur.length) return false;
+      cur.splice(idx, 1);
+      return true;
+    }
+    if (last in cur) { delete cur[last]; return true; }
+    return false;
+  }
+
+  // Expose authentic full Lodash & Zod v4 from parent MCP App bundle (zero external CDN dependency)
+  try {
+    if (!window._ && window.parent && window.parent.__TAVERN_LODASH__) {
+      window._ = window.parent.__TAVERN_LODASH__;
+    }
+    if (!window.z && window.parent && window.parent.__TAVERN_ZOD4__) {
+      window.z = window.parent.__TAVERN_ZOD4__;
+    }
+  } catch(e){}
+
   if (!window._) {
     window._ = {
       get: getByPath,
       set: setByPath,
+      unset: unsetByPath,
+      add: function(a, b){ return (Number(a) || 0) + (Number(b) || 0); },
       has: function(o, p){ return getByPath(o, p, Symbol.for('__missing__')) !== Symbol.for('__missing__'); },
       cloneDeep: cloneDeep,
       merge: mergeDeep,
@@ -309,6 +362,104 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
     },
   };
 
+  const REGISTERED_SCHEMAS = [];
+  function runRegisteredSchemas(inputStat, emitUpdateIfChanged){
+    if (REGISTERED_SCHEMAS.length === 0 || !inputStat || typeof inputStat !== 'object') return inputStat;
+    let current = cloneDeep(inputStat);
+    const beforeJson = JSON.stringify(current);
+    for (let i = 0; i < REGISTERED_SCHEMAS.length; i++){
+      const schema = REGISTERED_SCHEMAS[i];
+      if (!schema || typeof schema.safeParse !== 'function') continue;
+      try {
+        const res = schema.safeParse(current);
+        if (res && res.success && res.data && typeof res.data === 'object') {
+          current = res.data;
+        }
+      } catch(e){
+        console.error('[MVU Zod schema]', e);
+      }
+    }
+    const afterJson = JSON.stringify(current);
+    if (afterJson !== beforeJson) {
+      STAT = cloneDeep(current);
+      if (emitUpdateIfChanged) {
+        try {
+          window.parent.postMessage({ widgetId: WID, type: 'tavern:updateStat', statData: STAT }, '*');
+        } catch(e){}
+      }
+    }
+    return STAT;
+  }
+
+  const MVU_EVENTS = {
+    BEFORE_MESSAGE_UPDATE: 'mvu_before_message_update',
+    COMMAND_PARSED: 'mvu_command_parsed',
+    VARIABLE_INITIALIZED: 'mvu_variable_initialized',
+    VARIABLE_UPDATE_STARTED: 'mvu_variable_update_started',
+    SINGLE_VARIABLE_UPDATED: 'mvu_single_variable_updated',
+    VARIABLE_UPDATE_ENDED: 'mvu_variable_update_ended',
+    MESSAGE_RECEIVED: 'MESSAGE_RECEIVED',
+    MESSAGE_SENT: 'MESSAGE_SENT',
+  };
+
+  function makeMvuSnapshot(statObj){
+    const s = cloneDeep(statObj || {});
+    return {
+      stat_data: s,
+      display_data: cloneDeep(s),
+      delta_data: {},
+      initialized_lorebooks: {},
+    };
+  }
+
+  let mvuInitEmitted = false;
+  function registerMvuSchema(schema){
+    if (!schema || typeof schema.safeParse !== 'function') return false;
+    REGISTERED_SCHEMAS.push(schema);
+    try {
+      window.parent.postMessage({ widgetId: WID, type: 'tavern:schemaRegistered', count: REGISTERED_SCHEMAS.length }, '*');
+    } catch(e){}
+    if (STAT && Object.keys(STAT).length > 0) {
+      runRegisteredSchemas(STAT, true);
+      if (!mvuInitEmitted) {
+        mvuInitEmitted = true;
+        eventEmit(MVU_EVENTS.VARIABLE_INITIALIZED, makeMvuSnapshot(STAT), CURRENT_ID);
+      }
+    }
+    return true;
+  }
+
+  const Mvu = {
+    events: MVU_EVENTS,
+    registerMvuSchema: registerMvuSchema,
+    getMvuData: function(){
+      return makeMvuSnapshot(STAT);
+    },
+    replaceMvuData: function(next){
+      const prevSnap = makeMvuSnapshot(STAT);
+      const unwrapped = (next && typeof next === 'object' && next.stat_data && typeof next.stat_data === 'object') ? next.stat_data : next;
+      const derived = runRegisteredSchemas(unwrapped || {}, false);
+      pushStatUpdate(derived);
+      const nextSnap = makeMvuSnapshot(STAT);
+      eventEmit(MVU_EVENTS.VARIABLE_UPDATE_ENDED, nextSnap, prevSnap);
+      return nextSnap;
+    },
+    setMvuVariable: function(mvuData, path, value){
+      const target = (mvuData && typeof mvuData === 'object' && mvuData.stat_data) ? mvuData.stat_data : mvuData;
+      if (target && typeof target === 'object') setByPath(target, path, value);
+      return mvuData;
+    },
+    getRecordFromMvuData: function(mvuData, path){
+      const target = (mvuData && typeof mvuData === 'object' && mvuData.stat_data) ? mvuData.stat_data : mvuData;
+      return getByPath(target, path);
+    },
+  };
+
+  function waitGlobalInitialized(name){
+    if (name && window[name] !== undefined) return Promise.resolve(window[name]);
+    return Promise.resolve(true);
+  }
+
   window.triggerSlash = triggerSlash;
   window.getVariables = getVariables;
   window.replaceVariables = replaceVariables;
@@ -323,14 +474,29 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
   window.eventRemoveListener = eventRemoveListener;
   window.TavernHelper = TavernHelper;
   window.SillyTavern = SillyTavern;
+  window.Mvu = Mvu;
+  window.registerMvuSchema = registerMvuSchema;
+  window.waitGlobalInitialized = waitGlobalInitialized;
 
   window.addEventListener('message', function(evt){
     const msg = evt && evt.data;
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'tavern:statSync' && msg.statData && typeof msg.statData === 'object') {
+      const prevSnap = makeMvuSnapshot(STAT);
       STAT = cloneDeep(msg.statData);
+      const incomingSnap = makeMvuSnapshot(STAT);
+      if (!mvuInitEmitted && Object.keys(STAT).length > 0) {
+        mvuInitEmitted = true;
+        runRegisteredSchemas(STAT, true);
+        eventEmit(MVU_EVENTS.VARIABLE_INITIALIZED, makeMvuSnapshot(STAT), CURRENT_ID);
+      } else {
+        eventEmit(MVU_EVENTS.VARIABLE_UPDATE_STARTED, prevSnap, incomingSnap);
+        eventEmit(MVU_EVENTS.BEFORE_MESSAGE_UPDATE, { variables: incomingSnap, message_id: CURRENT_ID });
+        runRegisteredSchemas(STAT, true);
+        const finalSnap = makeMvuSnapshot(STAT);
+        eventEmit(MVU_EVENTS.VARIABLE_UPDATE_ENDED, finalSnap, prevSnap);
+      }
       eventEmit('VARIABLES_UPDATED', STAT);
-      eventEmit('mvu_variable_update_ended', STAT);
       eventEmit('MESSAGE_RECEIVED', STAT);
       postH();
     }

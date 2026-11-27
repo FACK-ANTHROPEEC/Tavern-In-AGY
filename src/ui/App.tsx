@@ -1,10 +1,19 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App } from '@modelcontextprotocol/ext-apps';
+import { z as zod4 } from 'zod4';
+import * as lodash from 'lodash-es';
 import type { RegexScript } from '../core/types';
 import { MvuTreeView } from './MvuTreeView';
 import { TavernFrontendHost, type CardFrontendPayload } from './TavernFrontendHost';
+import { MvuZodRuntimeHost } from './MvuZodRuntimeHost';
 import { FloorRenderer } from './FloorRenderer';
 import { unpackCharacterCardPng } from './png-unpack';
+
+if (typeof window !== 'undefined') {
+  const w = window as unknown as Record<string, unknown>;
+  w.__TAVERN_ZOD4__ = zod4;
+  w.__TAVERN_LODASH__ = lodash;
+}
 
 interface EmbeddedLoreEntrySummary {
   uid: string;
@@ -176,6 +185,7 @@ export function AppView() {
   const [pendingSend, setPendingSend] = useState<string | null>(null);
   const pendingBaseLastTurnIdRef = useRef<string | null>(null);
   const [cardFrontend, setCardFrontend] = useState<CardFrontendPayload | null>(null);
+  const [mvuSchemaCount, setMvuSchemaCount] = useState<number>(0);
   const [showPresetRegexList, setShowPresetRegexList] = useState<boolean>(false);
   const [showPresetHelperList, setShowPresetHelperList] = useState<boolean>(false);
   const [showCardRegexList, setShowCardRegexList] = useState<boolean>(false);
@@ -563,6 +573,54 @@ export function AppView() {
     return data.presets.find((p) => p.id === data.config.activePresetId) ?? null;
   }, [data]);
 
+  const enabledHelperSig = useMemo(() => {
+    const cardPart = (activeCard?.helperScripts ?? [])
+      .filter((s) => s.enabled)
+      .map((s) => `${s.index}:${s.name}`)
+      .join(',');
+    const presetPart = (activePreset?.helperScripts ?? [])
+      .filter((s) => s.enabled)
+      .map((s) => `${s.index}:${s.name}`)
+      .join(',');
+    return `${activeCard?.id ?? ''}|${activePreset?.id ?? ''}|${cardPart}|${presetPart}`;
+  }, [activeCard, activePreset]);
+
+  // Auto-load card/preset helper scripts in the background so MVU Zod schemas register automatically
+  useEffect(() => {
+    const hasAnyHelper =
+      Boolean(activeCard?.hasHelperScripts) ||
+      Boolean(activePreset?.helperScripts?.some((s) => s.enabled));
+    if (!activeCard || !hasAnyHelper) {
+      setCardFrontend(null);
+      setMvuSchemaCount(0);
+      return;
+    }
+    let cancelled = false;
+    const app = appRef.current;
+    if (!app) return;
+    app
+      .callServerTool({
+        name: 'story_app_get_card_frontend',
+        arguments: { cardId: activeCard.id },
+      })
+      .then((res) => {
+        if (cancelled || res?.isError) return;
+        const sc = res?.structuredContent as CardFrontendPayload | undefined;
+        if (sc) setCardFrontend(sc);
+      })
+      .catch(() => {
+        // ignore transient errors
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabledHelperSig, activeCard?.id, activeCard?.hasHelperScripts, activePreset]);
+
+  const handleSilentStatUpdate = useCallback((nextStat: Record<string, unknown>) => {
+    callTool('story_app_set_stat_data', { statData: nextStat });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const groupedPresetSections = useMemo(() => {
     if (!activePreset) return [];
     const query = presetSearch.trim().toLowerCase();
@@ -624,6 +682,14 @@ export function AppView() {
 
   return (
     <div className="app-shell" style={shellStyle}>
+      <MvuZodRuntimeHost
+        frontend={cardFrontend}
+        statData={data.statData ?? {}}
+        userName={data.config.userName || 'User'}
+        storyTurns={data.storyTurns ?? []}
+        onUpdateStatData={handleSilentStatUpdate}
+        onSchemaCountChange={setMvuSchemaCount}
+      />
       <div className="header">
         <div className="header-title">
           {activeCard?.avatarDataUrl ? (
@@ -1659,7 +1725,12 @@ export function AppView() {
               )}
 
               <div className="card-box">
-                <strong>MVU 变量树（stat_data）</strong>
+                <div className="row">
+                  <strong>MVU 变量树（stat_data）</strong>
+                  {mvuSchemaCount > 0 && (
+                    <span className="badge">MVU Zod Schema 已就绪 ({mvuSchemaCount})</span>
+                  )}
+                </div>
                 <MvuTreeView data={data.statData ?? {}} />
               </div>
 

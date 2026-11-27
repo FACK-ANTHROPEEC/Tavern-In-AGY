@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
+import { z as zod4 } from 'zod4';
 import { applyMvuUpdates, extractInitVarFromLorebooks } from '../src/core/mvu-engine.js';
 import { renderEjsTemplate } from '../src/core/ejs-engine.js';
 import { evaluateMacros } from '../src/core/macro-engine.js';
@@ -25,6 +26,42 @@ describe('MVU engine (generic stat_data + RFC 6902 JSON Patch)', () => {
     expect((res.statData.主面 as Record<string, unknown>).本源熔炉).toBe(500);
     expect((res.statData.主面 as Record<string, unknown>)._本源熔炉开关).toBe('OPEN');
     expect(res.cleanedText).toBe('她轻轻一笑。\n\n<StatusPlaceHolderImpl/>');
+  });
+
+  it('supports <json_patch> underscore tag and _.add / _.unset / _.assign with readonly `_` protection', () => {
+    const init = {
+      stats: { hp: 50, mp: 20, _locked: 1, tempBuff: 'haste' },
+      bag: { potion: 1 },
+    };
+    const reply = `战斗结束。\n<update>\n<json_patch>\n[{"op":"replace","path":"/stats/mp","value":35}]\n</json_patch>\n_.add('stats.hp', 15);\n_.unset('stats.tempBuff');\n_.unset('stats._locked');\n_.assign('bag', {"elixir": 2, "_secret": 9});\n</update>`;
+
+    const res = applyMvuUpdates(init, reply);
+    expect(res.appliedCount).toBe(4);
+    expect(res.rejectedPaths).toEqual(['stats._locked', 'bag._secret']);
+    const stats = res.statData.stats as Record<string, unknown>;
+    const bag = res.statData.bag as Record<string, unknown>;
+    expect(stats.hp).toBe(65);
+    expect(stats.mp).toBe(35);
+    expect(stats.tempBuff).toBeUndefined();
+    expect(stats._locked).toBe(1);
+    expect(bag.elixir).toBe(2);
+    expect(bag._secret).toBeUndefined();
+  });
+
+  it('provides authentic Zod v4 APIs (looseObject, strictObject, prettifyError) for MVU Zod schemas', () => {
+    const schema = zod4
+      .looseObject({
+        base: zod4.coerce.number().default(10),
+        bonus: zod4.coerce.number().default(5),
+      })
+      .transform((val) => ({ ...val, total: val.base + val.bonus }));
+    const parsed = schema.safeParse({ base: '20', extra: 'kept' });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.total).toBe(25);
+      expect(parsed.data.extra).toBe('kept');
+    }
+    expect(typeof zod4.prettifyError).toBe('function');
   });
 
   it('supports JS-Slash-Runner scoped variable macros and strips $ hidden keys', () => {

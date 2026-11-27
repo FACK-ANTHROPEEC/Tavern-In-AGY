@@ -53,6 +53,45 @@ export function setByDotPath(obj: Record<string, unknown>, dotPath: string, valu
   return obj;
 }
 
+export function unsetByDotPath(obj: Record<string, unknown>, dotPath: string): boolean {
+  const parts = dotPath.split('.').filter(Boolean);
+  if (parts.length === 0) return false;
+  let cur: unknown = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (!cur || typeof cur !== 'object') return false;
+    cur = (cur as Record<string, unknown>)[parts[i]];
+  }
+  if (!cur || typeof cur !== 'object') return false;
+  const last = parts[parts.length - 1];
+  if (Array.isArray(cur)) {
+    const idx = Number(last);
+    if (Number.isNaN(idx) || idx < 0 || idx >= cur.length) return false;
+    cur.splice(idx, 1);
+    return true;
+  }
+  if (last in (cur as Record<string, unknown>)) {
+    delete (cur as Record<string, unknown>)[last];
+    return true;
+  }
+  return false;
+}
+
+function parseLiteralValue(raw: string): { ok: true; value: unknown } | { ok: false } {
+  const trimmed = raw.trim();
+  if (!trimmed) return { ok: false };
+  try {
+    return { ok: true, value: JSON.parse(trimmed) };
+  } catch {
+    if (
+      (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+      (trimmed.startsWith('"') && trimmed.endsWith('"'))
+    ) {
+      return { ok: true, value: trimmed.slice(1, -1) };
+    }
+    return { ok: false };
+  }
+}
+
 export const lodashShim = {
   get: (obj: unknown, path: string, defaultValue?: unknown): unknown => {
     const v = getByDotPath(obj, path);
@@ -60,6 +99,7 @@ export const lodashShim = {
   },
   set: (obj: Record<string, unknown>, path: string, value: unknown): Record<string, unknown> =>
     setByDotPath(obj, path, value),
+  unset: (obj: Record<string, unknown>, path: string): boolean => unsetByDotPath(obj, path),
   assign: (target: Record<string, unknown>, ...sources: Array<Record<string, unknown>>): Record<string, unknown> =>
     Object.assign(target, ...sources),
   cloneDeep,
@@ -228,9 +268,9 @@ export function applyMvuUpdates(
   while ((match = blockRegex.exec(text)) !== null) {
     const body = match[1];
 
-    // 1. Try <JSONPatch>...</JSONPatch> or raw JSON array inside block
+    // 1. Try <JSONPatch> / <json_patch> or raw JSON array inside block
     const jsonPatchMatch =
-      body.match(/<jsonpatch>([\s\S]*?)<\/jsonpatch>/i) ??
+      body.match(/<json_?patch>([\s\S]*?)<\/json_?patch>/i) ??
       body.match(/```(?:json)?\s*(\[[\s\S]*?\])\s*```/i) ??
       body.match(/(\[\s*\{[\s\S]*?\}\s*\])/);
 
@@ -256,7 +296,7 @@ export function applyMvuUpdates(
       }
     }
 
-    // 2. Also support legacy MVU `_.set('path', value)` statements
+    // 2. Support MVU `_.set('path', value)` statements
     const setRegex = /_\.set\(\s*['"]([^'"]+)['"]\s*,\s*([^;\n)]+)\s*\)/g;
     let setMatch: RegExpExecArray | null;
     while ((setMatch = setRegex.exec(body)) !== null) {
@@ -266,16 +306,86 @@ export function applyMvuUpdates(
         rejectedPaths.push(dotPath);
         continue;
       }
-      try {
-        const val = JSON.parse(setMatch[2].trim());
-        setByDotPath(next, dotPath, val);
+      const parsed = parseLiteralValue(setMatch[2]);
+      if (parsed.ok) {
+        setByDotPath(next, dotPath, parsed.value);
         appliedCount += 1;
-      } catch {
-        // Fallback string literal if single-quoted
-        const rawVal = setMatch[2].trim();
-        if (rawVal.startsWith("'") && rawVal.endsWith("'")) {
-          setByDotPath(next, dotPath, rawVal.slice(1, -1));
-          appliedCount += 1;
+      }
+    }
+
+    // 3. Support MVU `_.add('path', delta)` statements
+    const addRegex = /_\.add\(\s*['"]([^'"]+)['"]\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/g;
+    let addMatch: RegExpExecArray | null;
+    while ((addMatch = addRegex.exec(body)) !== null) {
+      const dotPath = addMatch[1].trim();
+      const segs = dotPath.split('.');
+      if (hasReadonlyUnderscoreSegment(segs)) {
+        rejectedPaths.push(dotPath);
+        continue;
+      }
+      const delta = Number(addMatch[2]);
+      const curVal = getByDotPath(next, dotPath);
+      const baseNum = typeof curVal === 'number' && Number.isFinite(curVal) ? curVal : Number(curVal) || 0;
+      setByDotPath(next, dotPath, baseNum + delta);
+      appliedCount += 1;
+    }
+
+    // 4. Support MVU `_.unset('path')` statements
+    const unsetRegex = /_\.unset\(\s*['"]([^'"]+)['"]\s*\)/g;
+    let unsetMatch: RegExpExecArray | null;
+    while ((unsetMatch = unsetRegex.exec(body)) !== null) {
+      const dotPath = unsetMatch[1].trim();
+      const segs = dotPath.split('.');
+      if (hasReadonlyUnderscoreSegment(segs)) {
+        rejectedPaths.push(dotPath);
+        continue;
+      }
+      if (unsetByDotPath(next, dotPath)) {
+        appliedCount += 1;
+      }
+    }
+
+    // 5. Support MVU `_.assign('path', keyOrObj[, val])` statements
+    const assignRegex = /_\.assign\(\s*['"]([^'"]+)['"]\s*,\s*([^\n;]+?)\s*\)/g;
+    let assignMatch: RegExpExecArray | null;
+    while ((assignMatch = assignRegex.exec(body)) !== null) {
+      const dotPath = assignMatch[1].trim();
+      const segs = dotPath.split('.');
+      if (hasReadonlyUnderscoreSegment(segs)) {
+        rejectedPaths.push(dotPath);
+        continue;
+      }
+      const rest = assignMatch[2].trim();
+      const parsedObj = parseLiteralValue(rest);
+      if (parsedObj.ok && parsedObj.value && typeof parsedObj.value === 'object' && !Array.isArray(parsedObj.value)) {
+        const existing = getByDotPath(next, dotPath);
+        const targetObj =
+          existing && typeof existing === 'object' && !Array.isArray(existing)
+            ? (existing as Record<string, unknown>)
+            : {};
+        for (const [k, v] of Object.entries(parsedObj.value as Record<string, unknown>)) {
+          if (k.startsWith('_')) {
+            rejectedPaths.push(`${dotPath}.${k}`);
+            continue;
+          }
+          targetObj[k] = v;
+        }
+        setByDotPath(next, dotPath, targetObj);
+        appliedCount += 1;
+      } else {
+        // Two-arg form: _.assign('path', 'key', value)
+        const kvMatch = rest.match(/^['"]([^'"]+)['"]\s*,\s*([\s\S]+)$/);
+        if (kvMatch) {
+          const key = kvMatch[1].trim();
+          if (key.startsWith('_')) {
+            rejectedPaths.push(`${dotPath}.${key}`);
+            continue;
+          }
+          const parsedVal = parseLiteralValue(kvMatch[2]);
+          if (parsedVal.ok) {
+            setByDotPath(next, `${dotPath}.${key}`, parsedVal.value);
+            appliedCount += 1;
+          }
         }
       }
     }

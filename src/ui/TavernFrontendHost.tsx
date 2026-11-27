@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { buildSandboxedSrcDoc, parseSlashCommandToMessage } from './sandbox-shim';
+import { buildHelperScriptsStageHtml, buildSandboxedSrcDoc, parseSlashCommandToMessage } from './sandbox-shim';
 
 export interface FrontendHtmlTemplate {
   name: string;
@@ -99,13 +99,7 @@ export function TavernFrontendHost({
       });
     }
     // Helper scripts mode: wrap all enabled helper scripts inside an isolated stage document
-    const scriptTags = frontend.helperScripts
-      .map(
-        (sc) =>
-          `<script>\n// ${sc.name.replace(/-->/g, '')}\ntry {\n${sc.content.replace(/<\/script>/gi, '<\\/script>')}\n} catch (e) { console.error(e); }\n</script>`,
-      )
-      .join('\n');
-    const helperHtml = `<div id="tavern-helper-stage" style="min-height:240px;position:relative;"></div>\n${scriptTags}`;
+    const helperHtml = buildHelperScriptsStageHtml(frontend.helperScripts);
     return buildSandboxedSrcDoc(helperHtml, {
       widgetId,
       charName: frontend.cardName,
@@ -176,7 +170,7 @@ export function TavernFrontendHost({
           ref={iframeRef}
           title="Tavern Card Frontend Sandbox"
           className="inline-widget-frame"
-          sandbox="allow-scripts"
+          sandbox="allow-scripts allow-same-origin"
           srcDoc={srcDoc}
           style={{
             width: '100%',
