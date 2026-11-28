@@ -934,6 +934,8 @@ server.registerTool(
       ...(card.tavernHelperScripts ?? []).filter((s) => s.enabled),
     ];
 
+    const MAX_WORLDBOOK_SNAPSHOT_CHARS = 350_000;
+    let remainingWbBudget = MAX_WORLDBOOK_SNAPSHOT_CHARS;
     const worldbooks: Array<{
       id: string;
       name: string;
@@ -941,22 +943,33 @@ server.registerTool(
       entries: ReturnType<typeof serializeWorldbookEntryForSandbox>[];
     }> = [];
     if (card.embeddedLorebook) {
-      worldbooks.push({
-        id: card.embeddedLorebook.id,
-        name: card.embeddedLorebook.name,
-        isEmbedded: true,
-        entries: card.embeddedLorebook.entries.map(serializeWorldbookEntryForSandbox),
-      });
+      const serialized = card.embeddedLorebook.entries.map(serializeWorldbookEntryForSandbox);
+      const approxLen = JSON.stringify(serialized).length;
+      if (approxLen <= remainingWbBudget) {
+        remainingWbBudget -= approxLen;
+        worldbooks.push({
+          id: card.embeddedLorebook.id,
+          name: card.embeddedLorebook.name,
+          isEmbedded: true,
+          entries: serialized,
+        });
+      }
     }
     for (const lbId of config.activeLorebookIds) {
+      if (remainingWbBudget <= 0) break;
       const lb = storage.getLorebook(lbId);
       if (lb) {
-        worldbooks.push({
-          id: lb.id,
-          name: lb.name,
-          isEmbedded: false,
-          entries: lb.entries.map(serializeWorldbookEntryForSandbox),
-        });
+        const serialized = lb.entries.map(serializeWorldbookEntryForSandbox);
+        const approxLen = JSON.stringify(serialized).length;
+        if (approxLen <= remainingWbBudget) {
+          remainingWbBudget -= approxLen;
+          worldbooks.push({
+            id: lb.id,
+            name: lb.name,
+            isEmbedded: false,
+            entries: serialized,
+          });
+        }
       }
     }
 

@@ -58,6 +58,8 @@ export function MvuZodRuntimeHost({
     onSchemaCountChange?.(0);
     iframeLoadedRef.current = false;
     lastPushedJsonRef.current = '';
+    prevTurnCountRef.current = storyTurns.length;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scriptsSignature, onSchemaCountChange]);
 
   useEffect(() => {
@@ -156,6 +158,7 @@ export function MvuZodRuntimeHost({
       srcDoc={srcDoc}
       onLoad={() => {
         iframeLoadedRef.current = true;
+        prevTurnCountRef.current = storyTurns.length;
         const latest = latestStatDataRef.current;
         const curJson = JSON.stringify(latest ?? {});
         // Only push statSync if state changed since srcDoc was baked; otherwise record baked baseline

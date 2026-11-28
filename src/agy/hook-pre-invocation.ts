@@ -28,6 +28,12 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+const SIDE_PANE_PLACEHOLDER_RE = /^第\s*#\d+\s*楼\s*·\s*开始演绎$/;
+
+function isSidePanePlaceholder(text: string): boolean {
+  return SIDE_PANE_PLACEHOLDER_RE.test(text.trim());
+}
+
 export function handlePreInvocation(
   payload: PreInvocationInput,
   storage = new TavernStorage(),
@@ -53,6 +59,13 @@ export function handlePreInvocation(
     } else {
       session.rpModeActive = true;
       storage.saveSession(session);
+      // Clear any orphaned side-pane staged input left behind from an unbound window
+      const sharedOnBind = convId === 'default' ? session : storage.getSession('default');
+      if (sharedOnBind.stagedSidePaneInput || sharedOnBind.stagedSidePaneInputAt) {
+        sharedOnBind.stagedSidePaneInput = undefined;
+        sharedOnBind.stagedSidePaneInputAt = undefined;
+        storage.saveSession(sharedOnBind);
+      }
       if (!config.enabled) {
         storage.saveConfig({ enabled: true });
       }
@@ -97,6 +110,12 @@ export function handlePreInvocation(
     storage.saveSession(session);
   }
   if (!session.rpModeActive && (config.directorMode || !config.statelessPerTurn)) {
+    // Discard orphaned side-pane staged input if triggered from an unbound window so it can never hijack a later turn
+    if (isSidePanePlaceholder(lastUserInput) && (shared.stagedSidePaneInput || shared.stagedSidePaneInputAt)) {
+      shared.stagedSidePaneInput = undefined;
+      shared.stagedSidePaneInputAt = undefined;
+      storage.saveSession(shared);
+    }
     return {};
   }
 
@@ -116,7 +135,9 @@ export function handlePreInvocation(
   // with a 5-min TTL so the spawned story-writer subagent's SessionStart unlocks and injects full context.
   if (config.directorMode) {
     const currentUserStepStamp = readLastUserInputStamp(payload.transcriptPath);
+    const isFromSidePanePlaceholder = isSidePanePlaceholder(lastUserInput);
     const hasFreshStagedInput =
+      isFromSidePanePlaceholder &&
       Boolean(shared.stagedSidePaneInput) &&
       Date.now() - (shared.stagedSidePaneInputAt ?? 0) <= 300_000;
 
@@ -201,6 +222,11 @@ export function handlePreInvocation(
       shared.pendingDirectorInputAt = shared.stagedSidePaneInputAt ?? Date.now();
       shared.lastUserInputForCommit = staged;
     } else {
+      // User typed a real message directly in the main chatbox: never let stale stagedSidePaneInput hijack it
+      if (shared.stagedSidePaneInput || shared.stagedSidePaneInputAt) {
+        shared.stagedSidePaneInput = undefined;
+        shared.stagedSidePaneInputAt = undefined;
+      }
       shared.pendingDirectorInput = lastUserInput;
       shared.pendingDirectorInputAt = Date.now();
       shared.lastUserInputForCommit = lastUserInput;

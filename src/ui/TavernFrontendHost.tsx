@@ -151,8 +151,10 @@ export function TavernFrontendHost({
       charWorldbookName: frontend.charWorldbookName,
       charData: frontend.charData,
     });
+    // Intentionally depend on primitive cardId/cardName rather than the whole frontend object so
+    // live worldbook updates flow via postMessage('tavern:worldbookSync') without reloading the iframe.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mountMode, mountRevision, selectedTemplateIdx, frontend, widgetId, userName]);
+  }, [mountMode, mountRevision, selectedTemplateIdx, frontend.cardId, frontend.cardName, widgetId, userName]);
 
   return (
     <div className="card-box">

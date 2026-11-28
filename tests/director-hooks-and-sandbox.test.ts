@@ -204,6 +204,71 @@ describe('Director Mode multi-agent hook lifecycle', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('prevents P0-1 cross-turn hijacking by orphaned stagedSidePaneInput from unbound or earlier turns', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tavern-p01-'));
+    try {
+      const storage = new TavernStorage(tmpDir);
+      storage.saveCard({
+        id: 'card-a',
+        name: 'Alice',
+        description: 'Heroine',
+        personality: '',
+        scenario: '',
+        firstMessage: 'Hi',
+        messageExample: '',
+        systemPrompt: '',
+        postHistoryInstructions: '',
+        creatorNotes: '',
+        tags: [],
+        importedAt: new Date().toISOString(),
+      });
+      storage.saveConfig({ enabled: true, directorMode: true, activeCardId: 'card-a' });
+
+      // A1: Side-pane stages text while window is NOT bound via /rp
+      const shared1 = storage.getSession('default');
+      shared1.stagedSidePaneInput = 'OLD STAGED TEXT (card A)';
+      shared1.stagedSidePaneInputAt = Date.now();
+      storage.saveSession(shared1);
+
+      const unboundRes = handlePreInvocation(
+        { conversationId: 'fresh-win', lastUserInput: '第 #1 楼 · 开始演绎', invocationNum: 1 },
+        storage,
+      );
+      expect(unboundRes.injectSteps).toBeUndefined();
+      // Orphaned staged input is immediately cleared when triggered on an unbound window
+      expect(storage.getSession('default').stagedSidePaneInput).toBeUndefined();
+
+      // Even if a fresh staged input was left around before `/rp` binding, `/rp` clears it
+      const shared2 = storage.getSession('default');
+      shared2.stagedSidePaneInput = 'STALE BEFORE RP';
+      shared2.stagedSidePaneInputAt = Date.now();
+      storage.saveSession(shared2);
+
+      handlePreInvocation({ conversationId: 'fresh-win', lastUserInput: '/rp', invocationNum: 1 }, storage);
+      expect(storage.getSession('default').stagedSidePaneInput).toBeUndefined();
+
+      // A2: Even inside an already-bound RP window, if stale stagedSidePaneInput exists and the user
+      // types a real message directly in the main chatbox (not a side-pane placeholder),
+      // pendingDirectorInput MUST use the real message and clear stale stagedSidePaneInput.
+      const shared3 = storage.getSession('default');
+      shared3.stagedSidePaneInput = 'OLD STAGED TEXT (card A)';
+      shared3.stagedSidePaneInputAt = Date.now();
+      storage.saveSession(shared3);
+
+      const boundRealRes = handlePreInvocation(
+        { conversationId: 'fresh-win', lastUserInput: '今晚我们去哪？', invocationNum: 1 },
+        storage,
+      );
+      expect(boundRealRes.injectSteps).toBeDefined();
+      const afterReal = storage.getSession('default');
+      expect(afterReal.pendingDirectorInput).toBe('今晚我们去哪？');
+      expect(afterReal.lastUserInputForCommit).toBe('今晚我们去哪？');
+      expect(afterReal.stagedSidePaneInput).toBeUndefined();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('sandbox-shim inline script escape safety', () => {
