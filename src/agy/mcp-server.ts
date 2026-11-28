@@ -341,7 +341,7 @@ function buildBootstrapPayload(opts?: { omitAvatars?: boolean; slimForPanelOpen?
 
 const server = new McpServer({
   name: 'tavern-in-agy',
-  version: '0.7.0',
+  version: '0.8.2',
 });
 
 // UI Resource (SEP-1865 MCP App) with dynamic image-host CSP resourceDomains
@@ -739,11 +739,164 @@ server.registerTool(
   }),
 );
 
+function serializeWorldbookEntryForSandbox(e: Lorebook['entries'][number]) {
+  return {
+    uid: e.uid,
+    name: e.comment,
+    comment: e.comment,
+    enabled: e.enabled,
+    disable: !e.enabled,
+    content: e.content,
+    keys: e.keys,
+    secondary_keys: e.secondaryKeys,
+    constant: e.constant,
+    selective: e.selective,
+    selective_logic: e.selectiveLogic,
+    order: e.order,
+    position: e.position,
+    depth: e.depth,
+    role: e.role,
+    case_sensitive: e.caseSensitive,
+    match_whole_words: e.matchWholeWords,
+    exclude_recursion: e.excludeRecursion,
+    prevent_recursion: e.preventRecursion,
+    delay_until_recursion: e.delayUntilRecursion,
+    strategy: {
+      type: e.constant ? ('constant' as const) : ('selective' as const),
+      keys: e.keys,
+      keys_secondary: {
+        logic:
+          e.selectiveLogic === 3
+            ? 'and_all'
+            : e.selectiveLogic === 2
+              ? 'not_any'
+              : e.selectiveLogic === 1
+                ? 'not_all'
+                : 'and_any',
+        keys: e.secondaryKeys,
+      },
+      scan_depth: e.scanDepth ?? ('same_as_global' as const),
+    },
+  };
+}
+
+function normalizeSandboxEntryToLorebookEntry(
+  raw: Record<string, unknown>,
+  fallbackIndex: number,
+): Lorebook['entries'][number] {
+  const strat =
+    raw.strategy && typeof raw.strategy === 'object'
+      ? (raw.strategy as Record<string, unknown>)
+      : null;
+  const stratSec =
+    strat?.keys_secondary && typeof strat.keys_secondary === 'object'
+      ? (strat.keys_secondary as Record<string, unknown>)
+      : null;
+  const keys = Array.isArray(raw.keys)
+    ? raw.keys.map(String)
+    : Array.isArray(strat?.keys)
+      ? (strat.keys as unknown[]).map(String)
+      : [];
+  const secondaryKeys = Array.isArray(raw.secondary_keys)
+    ? raw.secondary_keys.map(String)
+    : Array.isArray(raw.secondaryKeys)
+      ? raw.secondaryKeys.map(String)
+      : Array.isArray(stratSec?.keys)
+        ? (stratSec.keys as unknown[]).map(String)
+        : [];
+  const constant =
+    typeof raw.constant === 'boolean'
+      ? raw.constant
+      : strat?.type === 'constant';
+  const enabled =
+    typeof raw.enabled === 'boolean'
+      ? raw.enabled
+      : typeof raw.disable === 'boolean'
+        ? !raw.disable
+        : true;
+  const rawLogic = raw.selective_logic ?? raw.selectiveLogic;
+  let selectiveLogic: 0 | 1 | 2 | 3 = 0;
+  if (rawLogic === 1 || rawLogic === 2 || rawLogic === 3) {
+    selectiveLogic = rawLogic;
+  } else if (stratSec?.logic === 'and_all') {
+    selectiveLogic = 3;
+  } else if (stratSec?.logic === 'not_any') {
+    selectiveLogic = 2;
+  } else if (stratSec?.logic === 'not_all') {
+    selectiveLogic = 1;
+  }
+  const posRaw = String(raw.position ?? 'after_char');
+  const position: 'before_char' | 'after_char' | 'in_chat' =
+    posRaw === 'before_char' || posRaw === 'in_chat' ? posRaw : 'after_char';
+  const roleRaw = raw.role;
+  const role: 'system' | 'user' | 'assistant' | undefined =
+    roleRaw === 'system' || roleRaw === 'user' || roleRaw === 'assistant' ? roleRaw : undefined;
+  return {
+    uid:
+      raw.uid !== undefined && raw.uid !== null && String(raw.uid) !== ''
+        ? String(raw.uid)
+        : `wb-${Date.now()}-${fallbackIndex}`,
+    keys,
+    secondaryKeys,
+    selective: typeof raw.selective === 'boolean' ? raw.selective : !constant,
+    selectiveLogic,
+    constant,
+    content: typeof raw.content === 'string' ? raw.content : '',
+    comment:
+      typeof raw.comment === 'string'
+        ? raw.comment
+        : typeof raw.name === 'string'
+          ? raw.name
+          : '',
+    enabled,
+    order: typeof raw.order === 'number' && !Number.isNaN(raw.order) ? raw.order : 100,
+    position,
+    depth: typeof raw.depth === 'number' ? raw.depth : undefined,
+    role,
+    caseSensitive:
+      typeof raw.case_sensitive === 'boolean'
+        ? raw.case_sensitive
+        : typeof raw.caseSensitive === 'boolean'
+          ? raw.caseSensitive
+          : undefined,
+    matchWholeWords:
+      typeof raw.match_whole_words === 'boolean'
+        ? raw.match_whole_words
+        : typeof raw.matchWholeWords === 'boolean'
+          ? raw.matchWholeWords
+          : undefined,
+    excludeRecursion:
+      typeof raw.exclude_recursion === 'boolean'
+        ? raw.exclude_recursion
+        : typeof raw.excludeRecursion === 'boolean'
+          ? raw.excludeRecursion
+          : undefined,
+    preventRecursion:
+      typeof raw.prevent_recursion === 'boolean'
+        ? raw.prevent_recursion
+        : typeof raw.preventRecursion === 'boolean'
+          ? raw.preventRecursion
+          : undefined,
+    delayUntilRecursion:
+      typeof raw.delay_until_recursion === 'boolean'
+        ? raw.delay_until_recursion
+        : typeof raw.delayUntilRecursion === 'boolean'
+          ? raw.delayUntilRecursion
+          : undefined,
+    scanDepth:
+      typeof strat?.scan_depth === 'number'
+        ? strat.scan_depth
+        : typeof raw.scanDepth === 'number'
+          ? raw.scanDepth
+          : undefined,
+  };
+}
+
 server.registerTool(
   'story_app_get_card_frontend',
   {
     title: 'Get Active Card Frontend Assets',
-    description: 'Fetch the active card HTML status-bar regexes, tavern_helper scripts, and custom extensions for the side-pane TavernHelper shim.',
+    description: 'Fetch the active card HTML status-bar regexes, tavern_helper scripts, worldbook snapshots, and custom extensions for the side-pane TavernHelper shim.',
     inputSchema: {
       cardId: z.string().optional(),
     },
@@ -756,7 +909,13 @@ server.registerTool(
     if (!card) {
       return {
         content: [{ type: 'text', text: 'no active card' }],
-        structuredContent: { htmlTemplates: [], helperScripts: [], customExtensions: {} },
+        structuredContent: {
+          htmlTemplates: [],
+          helperScripts: [],
+          customExtensions: {},
+          worldbooks: [],
+          charWorldbookName: null,
+        },
       };
     }
     const htmlTemplates = (card.regexScripts ?? [])
@@ -775,6 +934,32 @@ server.registerTool(
       ...(card.tavernHelperScripts ?? []).filter((s) => s.enabled),
     ];
 
+    const worldbooks: Array<{
+      id: string;
+      name: string;
+      isEmbedded?: boolean;
+      entries: ReturnType<typeof serializeWorldbookEntryForSandbox>[];
+    }> = [];
+    if (card.embeddedLorebook) {
+      worldbooks.push({
+        id: card.embeddedLorebook.id,
+        name: card.embeddedLorebook.name,
+        isEmbedded: true,
+        entries: card.embeddedLorebook.entries.map(serializeWorldbookEntryForSandbox),
+      });
+    }
+    for (const lbId of config.activeLorebookIds) {
+      const lb = storage.getLorebook(lbId);
+      if (lb) {
+        worldbooks.push({
+          id: lb.id,
+          name: lb.name,
+          isEmbedded: false,
+          entries: lb.entries.map(serializeWorldbookEntryForSandbox),
+        });
+      }
+    }
+
     return {
       content: [{ type: 'text', text: 'ok' }],
       structuredContent: {
@@ -783,7 +968,61 @@ server.registerTool(
         htmlTemplates,
         helperScripts,
         customExtensions: card.customExtensions ?? {},
+        worldbooks,
+        charWorldbookName: card.embeddedLorebook?.name ?? null,
+        charData: {
+          name: card.name,
+          description: card.description,
+          personality: card.personality,
+          scenario: card.scenario,
+          first_mes: card.firstMessage,
+          tags: card.tags,
+        },
       },
+    };
+  },
+);
+
+server.registerTool(
+  'story_app_replace_worldbook_entries',
+  {
+    title: 'Replace Worldbook Entries from Sandbox Script',
+    description: 'Persist worldbook entry updates triggered by JS-Slash-Runner worldbook APIs (replaceWorldbook / updateWorldbookWith / createWorldbookEntries / deleteWorldbookEntries).',
+    inputSchema: {
+      bookName: z.string(),
+      entries: z.array(z.record(z.string(), z.unknown())),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ bookName, entries }) => {
+    const config = storage.getConfig();
+    const normalizedEntries = entries.map((e, idx) => normalizeSandboxEntryToLorebookEntry(e, idx));
+    const card = config.activeCardId ? storage.getCard(config.activeCardId) : null;
+    if (
+      bookName &&
+      card?.embeddedLorebook &&
+      (card.embeddedLorebook.name === bookName || card.embeddedLorebook.id === bookName)
+    ) {
+      card.embeddedLorebook.entries = normalizedEntries;
+      storage.saveCard(card);
+      return {
+        content: [{ type: 'text', text: `updated embedded worldbook ${card.embeddedLorebook.name}` }],
+        structuredContent: buildBootstrapPayload(),
+      };
+    }
+    const allBooks = storage.listLorebooks();
+    const matched = allBooks.find((b) => b.name === bookName || b.id === bookName);
+    if (matched) {
+      matched.entries = normalizedEntries;
+      storage.saveLorebook(matched);
+      return {
+        content: [{ type: 'text', text: `updated worldbook ${matched.name}` }],
+        structuredContent: buildBootstrapPayload(),
+      };
+    }
+    return {
+      content: [{ type: 'text', text: `worldbook not found: ${bookName}` }],
+      structuredContent: buildBootstrapPayload(),
     };
   },
 );

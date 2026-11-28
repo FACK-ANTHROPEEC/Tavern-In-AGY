@@ -2,7 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { RegexScript } from '../core/types';
 import { applyRegexScripts, foldUnknownCustomTags, splitFloorSegments } from '../core/regex-engine';
 import { extractMemorySummary, stripMemorySummaryTags } from '../core/memory-engine';
-import { buildProseBeautifierSrcDoc, buildSandboxedSrcDoc, parseSlashCommandAction } from './sandbox-shim';
+import {
+  buildProseBeautifierSrcDoc,
+  buildSandboxedSrcDoc,
+  parseSlashCommandAction,
+  type SandboxWorldbookEntry,
+  type SandboxWorldbookSnapshot,
+} from './sandbox-shim';
 
 interface FloorRendererProps {
   narrative: string;
@@ -22,9 +28,12 @@ interface FloorRendererProps {
   storyTurns?: Array<{ index: number; userMessage?: string; narrative: string }>;
   greetings?: string[];
   activeGreetingIndex?: number;
+  worldbooks?: SandboxWorldbookSnapshot[];
+  charWorldbookName?: string | null;
   onSendMessage: (text: string) => void;
   onSetInput?: (text: string) => void;
   onUpdateStatData?: (nextStatData: Record<string, unknown>) => void;
+  onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[]) => void;
   onSelectGreeting?: (index: number) => void;
 }
 
@@ -72,9 +81,12 @@ function InlineRegexWidget({
   storyTurns,
   greetings,
   activeGreetingIndex,
+  worldbooks,
+  charWorldbookName,
   onSendMessage,
   onSetInput,
   onUpdateStatData,
+  onReplaceWorldbook,
   onSelectGreeting,
 }: {
   html: string;
@@ -87,9 +99,12 @@ function InlineRegexWidget({
   storyTurns?: Array<{ index: number; userMessage?: string; narrative: string }>;
   greetings?: string[];
   activeGreetingIndex?: number;
+  worldbooks?: SandboxWorldbookSnapshot[];
+  charWorldbookName?: string | null;
   onSendMessage: (text: string) => void;
   onSetInput?: (text: string) => void;
   onUpdateStatData?: (nextStatData: Record<string, unknown>) => void;
+  onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[]) => void;
   onSelectGreeting?: (index: number) => void;
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -116,11 +131,13 @@ function InlineRegexWidget({
         }
       } else if (msg.type === 'tavern:updateStat' && msg.statData && typeof msg.statData === 'object') {
         onUpdateStatData?.(msg.statData as Record<string, unknown>);
+      } else if (msg.type === 'tavern:worldbookReplace' && typeof msg.bookName === 'string' && Array.isArray(msg.entries)) {
+        onReplaceWorldbook?.(msg.bookName, msg.entries as SandboxWorldbookEntry[]);
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [widgetId, onSendMessage, onSetInput, onUpdateStatData, onSelectGreeting]);
+  }, [widgetId, onSendMessage, onSetInput, onUpdateStatData, onReplaceWorldbook, onSelectGreeting]);
 
   // Push live stat updates into the mounted iframe without rebuilding srcDoc
   useEffect(() => {
@@ -134,6 +151,18 @@ function InlineRegexWidget({
     }
   }, [statData]);
 
+  useEffect(() => {
+    if (!worldbooks) return;
+    try {
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: 'tavern:worldbookSync', worldbooks },
+        '*',
+      );
+    } catch {
+      // ignore
+    }
+  }, [worldbooks]);
+
   const srcDoc = useMemo(
     () =>
       buildSandboxedSrcDoc(html, {
@@ -146,6 +175,8 @@ function InlineRegexWidget({
         greetings,
         activeGreetingIndex,
         storyTurns,
+        worldbooks,
+        charWorldbookName,
       }),
     // Intentionally keep statData out of srcDoc deps so live updates flow via postMessage without flickering
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -294,9 +325,12 @@ export function FloorRenderer({
   storyTurns,
   greetings,
   activeGreetingIndex,
+  worldbooks,
+  charWorldbookName,
   onSendMessage,
   onSetInput,
   onUpdateStatData,
+  onReplaceWorldbook,
   onSelectGreeting,
 }: FloorRendererProps) {
   const { cleanNarrative, resolvedSummary } = useMemo(() => {
@@ -395,9 +429,12 @@ export function FloorRenderer({
             storyTurns={storyTurns}
             greetings={greetings}
             activeGreetingIndex={activeGreetingIndex}
+            worldbooks={worldbooks}
+            charWorldbookName={charWorldbookName}
             onSendMessage={onSendMessage}
             onSetInput={onSetInput}
             onUpdateStatData={onUpdateStatData}
+            onReplaceWorldbook={onReplaceWorldbook}
             onSelectGreeting={onSelectGreeting}
           />
         );

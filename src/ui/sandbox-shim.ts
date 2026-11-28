@@ -1,3 +1,48 @@
+export interface SandboxWorldbookEntry {
+  uid: string | number;
+  name?: string;
+  comment?: string;
+  enabled?: boolean;
+  disable?: boolean;
+  content: string;
+  keys?: string[];
+  secondary_keys?: string[];
+  constant?: boolean;
+  selective?: boolean;
+  selective_logic?: number;
+  order?: number;
+  position?: string;
+  depth?: number;
+  role?: string;
+  case_sensitive?: boolean;
+  match_whole_words?: boolean;
+  exclude_recursion?: boolean;
+  prevent_recursion?: boolean;
+  delay_until_recursion?: boolean;
+  strategy?: {
+    type?: 'constant' | 'selective' | 'vectorized';
+    keys?: string[];
+    keys_secondary?: { logic?: string; keys?: string[] };
+    scan_depth?: number | 'same_as_global';
+  };
+}
+
+export interface SandboxWorldbookSnapshot {
+  id: string;
+  name: string;
+  isEmbedded?: boolean;
+  entries: SandboxWorldbookEntry[];
+}
+
+export interface SandboxCharData {
+  name: string;
+  description?: string;
+  personality?: string;
+  scenario?: string;
+  first_mes?: string;
+  tags?: string[];
+}
+
 export interface SandboxShimOptions {
   widgetId: string;
   charName: string;
@@ -13,6 +58,12 @@ export interface SandboxShimOptions {
   activeGreetingIndex?: number;
   storyTurns?: Array<{ index: number; userMessage?: string; narrative: string }>;
   customExtensions?: Record<string, unknown>;
+  /** Active worldbooks (character embedded + active external lorebooks) for JS-Slash-Runner worldbook APIs */
+  worldbooks?: SandboxWorldbookSnapshot[];
+  /** Name of the active character's primary (embedded) worldbook, if any */
+  charWorldbookName?: string | null;
+  /** Active character metadata for getCharData() */
+  charData?: SandboxCharData;
   /** Lightweight mode for per-floor prose beautifiers: omits full storyTurns/greetings serialization */
   liteProseMode?: boolean;
 }
@@ -157,7 +208,7 @@ export function buildProseBeautifierSrcDoc(
         .replace(/^\s*import\s+(?:[^'"]+\s+from\s+)?['"]https?:\/\/[^'"]+['"]\s*;?\s*$/gm, '// [local Mvu/Zod runtime active]')
         .replace(/<\/script>/gi, '<\\/script>');
       const safeName = sc.name.replace(/-->/g, '').replace(/\r?\n/g, ' ');
-      return `<script>\n// ${safeName}\n(function(){\ntry {\n${sanitized}\n} catch (e) { console.error('[ProseBeautifier:' + ${safeJsonForInlineScript(safeName)} + ']', e); }\n})();\n</script>`;
+      return `<script>\n// ${safeName}\n(function(){\nwindow.__TAVERN_CURRENT_SCRIPT__ = ${safeJsonForInlineScript(safeName)};\ntry {\n${sanitized}\n} catch (e) { console.error('[ProseBeautifier:' + ${safeJsonForInlineScript(safeName)} + ']', e); if (typeof window.__tavernReportScriptError === 'function') window.__tavernReportScriptError(${safeJsonForInlineScript(safeName)}, e); }\n})();\n</script>`;
     })
     .join('\n');
 
@@ -203,7 +254,7 @@ export function buildHelperScriptsStageHtml(
         .replace(/^\s*import\s+(?:[^'"]+\s+from\s+)?['"]https?:\/\/[^'"]+['"]\s*;?\s*$/gm, '// [local Mvu/Zod runtime active]')
         .replace(/<\/script>/gi, '<\\/script>');
       const safeName = sc.name.replace(/-->/g, '').replace(/\r?\n/g, ' ');
-      return `<script>\n// ${safeName}\n(async function(){\ntry {\n${sanitized}\n} catch (e) { console.error('[HelperScript:' + ${safeJsonForInlineScript(safeName)} + ']', e); }\n})();\n</script>`;
+      return `<script>\n// ${safeName}\n(async function(){\nwindow.__TAVERN_CURRENT_SCRIPT__ = ${safeJsonForInlineScript(safeName)};\ntry {\n${sanitized}\n} catch (e) { console.error('[HelperScript:' + ${safeJsonForInlineScript(safeName)} + ']', e); if (typeof window.__tavernReportScriptError === 'function') window.__tavernReportScriptError(${safeJsonForInlineScript(safeName)}, e); }\n})();\n</script>`;
     })
     .join('\n');
   return `<div id="tavern-helper-stage" style="min-height:1px;position:relative;"></div>\n${scriptTags}`;
@@ -297,7 +348,24 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
   const CHAT = ${safeJsonForInlineScript(chatMessages)};
   const CURRENT_ID = ${safeJsonForInlineScript(currentId)};
   const EXT = ${safeJsonForInlineScript(opts.customExtensions ?? {})};
+  let WORLDBOOKS = ${safeJsonForInlineScript(opts.liteProseMode ? [] : (opts.worldbooks ?? []))};
+  const CHAR_WORLDBOOK_NAME = ${safeJsonForInlineScript(opts.charWorldbookName ?? null)};
+  const CHAR_DATA = ${safeJsonForInlineScript(opts.charData ?? { name: opts.charName || 'Character' })};
   const LISTENERS = new Map();
+
+  function reportScriptError(scriptName, err){
+    try {
+      const msg = (err && typeof err === 'object' && err.message) ? String(err.message) : String(err || 'Unknown script error');
+      window.parent.postMessage({ widgetId: WID, type: 'tavern:scriptError', scriptName: String(scriptName || window.__TAVERN_CURRENT_SCRIPT__ || 'script'), message: msg }, '*');
+    } catch(e){}
+  }
+  window.__tavernReportScriptError = reportScriptError;
+  window.addEventListener('error', function(evt){
+    if (evt && evt.message) reportScriptError(window.__TAVERN_CURRENT_SCRIPT__ || 'runtime', evt.error || evt.message);
+  });
+  window.addEventListener('unhandledrejection', function(evt){
+    if (evt && evt.reason) reportScriptError(window.__TAVERN_CURRENT_SCRIPT__ || 'async', evt.reason);
+  });
 
   function cloneDeep(v){
     try { return JSON.parse(JSON.stringify(v)); } catch(e){ return v; }
@@ -399,28 +467,66 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
 
   function eventEmit(evt){
     const args = Array.prototype.slice.call(arguments, 1);
-    const list = LISTENERS.get(evt) || [];
+    const list = (LISTENERS.get(evt) || []).slice();
     for (let i = 0; i < list.length; i++){
-      try { list[i].apply(null, args); } catch(e){}
+      try { list[i].apply(null, args); } catch(e){ reportScriptError('event:' + String(evt), e); }
     }
   }
   function eventOn(evt, fn){
-    if (typeof fn !== 'function') return;
+    if (typeof fn !== 'function') return { stop: function(){} };
     const list = LISTENERS.get(evt) || [];
     list.push(fn);
     LISTENERS.set(evt, list);
+    return { stop: function(){ eventRemoveListener(evt, fn); } };
+  }
+  function eventMakeLast(evt, fn){
+    if (typeof fn !== 'function') return { stop: function(){} };
+    eventRemoveListener(evt, fn);
+    return eventOn(evt, fn);
+  }
+  function eventMakeFirst(evt, fn){
+    if (typeof fn !== 'function') return { stop: function(){} };
+    eventRemoveListener(evt, fn);
+    const list = LISTENERS.get(evt) || [];
+    list.unshift(fn);
+    LISTENERS.set(evt, list);
+    return { stop: function(){ eventRemoveListener(evt, fn); } };
   }
   function eventOnce(evt, fn){
-    if (typeof fn !== 'function') return;
+    if (typeof fn !== 'function') return { stop: function(){} };
     const wrapper = function(){
       eventRemoveListener(evt, wrapper);
       return fn.apply(null, arguments);
     };
-    eventOn(evt, wrapper);
+    return eventOn(evt, wrapper);
   }
   function eventRemoveListener(evt, fn){
     const list = LISTENERS.get(evt) || [];
     LISTENERS.set(evt, list.filter(function(x){ return x !== fn; }));
+  }
+  function eventClearEvent(evt){
+    LISTENERS.delete(evt);
+  }
+  function eventClearAll(){
+    LISTENERS.clear();
+  }
+
+  function normalizeVarPath(path){
+    if (Array.isArray(path)) return path[0] === 'stat_data' ? path.slice(1) : path;
+    const s = String(path || '').trim();
+    if (s === 'stat_data') return '';
+    return s.startsWith('stat_data.') ? s.slice('stat_data.'.length) : s;
+  }
+  function insertMissingDeep(target, src){
+    if (!src || typeof src !== 'object') return target;
+    Object.keys(src).forEach(function(k){
+      if (!(k in target) || target[k] === undefined) {
+        target[k] = cloneDeep(src[k]);
+      } else if (src[k] && typeof src[k] === 'object' && !Array.isArray(src[k]) && target[k] && typeof target[k] === 'object' && !Array.isArray(target[k])) {
+        insertMissingDeep(target[k], src[k]);
+      }
+    });
+    return target;
   }
 
   function getVariables(){
@@ -429,6 +535,11 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
   }
   function getAllVariables(){
     return getVariables();
+  }
+  function getVariable(path, def){
+    const norm = normalizeVarPath(path);
+    if (!norm) return cloneDeep(STAT);
+    return getByPath(STAT, norm, def);
   }
   function pushStatUpdate(nextStat){
     const cleaned = cloneDeep(nextStat || {});
@@ -447,11 +558,36 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
     pushStatUpdate(unwrapped || {});
     return getVariables();
   }
-  function insertOrAssignVariables(patch){
+  function insertVariables(patch){
     const raw = (patch && typeof patch === 'object' && patch.stat_data && typeof patch.stat_data === 'object') ? patch.stat_data : (patch || {});
+    const merged = insertMissingDeep(cloneDeep(STAT), raw);
+    pushStatUpdate(merged);
+    return getVariables();
+  }
+  function insertOrAssignVariables(patchOrPath, maybeVal){
+    if (typeof patchOrPath === 'string') {
+      const norm = normalizeVarPath(patchOrPath);
+      const next = cloneDeep(STAT);
+      if (!norm && maybeVal && typeof maybeVal === 'object') {
+        pushStatUpdate(maybeVal);
+      } else if (norm) {
+        setByPath(next, norm, cloneDeep(maybeVal));
+        pushStatUpdate(next);
+      }
+      return getVariables();
+    }
+    const raw = (patchOrPath && typeof patchOrPath === 'object' && patchOrPath.stat_data && typeof patchOrPath.stat_data === 'object') ? patchOrPath.stat_data : (patchOrPath || {});
     const merged = mergeDeep(cloneDeep(STAT), raw);
     pushStatUpdate(merged);
     return getVariables();
+  }
+  function deleteVariable(path){
+    const norm = normalizeVarPath(path);
+    if (!norm) return { variables: getVariables(), delete_occurred: false };
+    const next = cloneDeep(STAT);
+    const occurred = unsetByPath(next, norm);
+    if (occurred) pushStatUpdate(next);
+    return { variables: getVariables(), delete_occurred: occurred };
   }
   function updateVariablesWith(updater){
     const prevSnap = cloneDeep(STAT);
@@ -469,6 +605,7 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
       pushStatUpdate(nextStat);
       return getVariables();
     } catch(e){
+      reportScriptError('updateVariablesWith', e);
       return getVariables();
     }
   }
@@ -527,32 +664,247 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
     return Promise.resolve();
   }
 
+  function substitudeMacros(text){
+    const raw = String(text ?? '');
+    const lastMsg = CHAT.length > 0 ? String(CHAT[CHAT.length - 1].message || '') : '';
+    return raw.replace(/\\{\\{([^{}]+)\\}\\}/g, function(full, inner){
+      const key = String(inner || '').trim();
+      const lower = key.toLowerCase();
+      if (lower === 'char') return CHAR;
+      if (lower === 'user') return USER;
+      if (lower === 'lastmessageid') return String(getLastMessageId());
+      if (lower === 'currentmessageid') return String(CURRENT_ID);
+      if (lower === 'lastmessage' || lower === 'lastcharmessage') return lastMsg;
+      if (lower === 'newline') return '\\n';
+      const getVarMatch = key.match(/^(?:getvar|getglobalvar|get_message_variable|get_chat_variable)::(.*)$/i);
+      if (getVarMatch) {
+        const val = getVariable(getVarMatch[1].trim(), '');
+        if (val === undefined || val === null) return '';
+        return typeof val === 'object' ? JSON.stringify(val) : String(val);
+      }
+      return full;
+    });
+  }
+  const substituteMacros = substitudeMacros;
+
   function triggerSlash(cmd){
-    try {
-      window.parent.postMessage({ widgetId: WID, type: 'tavern:slash', cmd: String(cmd || '') }, '*');
-    } catch(e){}
-    return Promise.resolve('');
+    const raw = String(cmd || '').trim();
+    if (!raw) return Promise.resolve('');
+    const parts = raw.split(/\\|\\|/).map(function(p){ return p.trim(); }).filter(Boolean);
+    let lastResult = '';
+    const forwarded = [];
+    for (let i = 0; i < parts.length; i++){
+      const part = parts[i];
+      const setVarNamed = part.match(/^\\/setvar\\s+key=([^\\s]+)\\s+([\\s\\S]+)$/i);
+      const setVarSimple = !setVarNamed && part.match(/^\\/setvar\\s+([^\\s=]+)\\s+([\\s\\S]+)$/i);
+      if (setVarNamed || setVarSimple) {
+        const m = setVarNamed || setVarSimple;
+        const k = m[1].replace(/^["']|["']$/g, '');
+        const vRaw = substitudeMacros(m[2].trim());
+        const num = Number(vRaw);
+        const val = (vRaw !== '' && !Number.isNaN(num) && /^-?\\d+(?:\\.\\d+)?$/.test(vRaw)) ? num : vRaw;
+        insertOrAssignVariables(k, val);
+        lastResult = String(val);
+        continue;
+      }
+      const addVarMatch = part.match(/^\\/addvar\\s+(?:key=)?([^\\s]+)\\s+([\\s\\S]+)$/i);
+      if (addVarMatch) {
+        const k = addVarMatch[1].replace(/^["']|["']$/g, '');
+        const delta = Number(substitudeMacros(addVarMatch[2].trim()));
+        const prev = Number(getVariable(k, 0)) || 0;
+        const nextVal = Number.isNaN(delta) ? prev : prev + delta;
+        insertOrAssignVariables(k, nextVal);
+        lastResult = String(nextVal);
+        continue;
+      }
+      const getVarMatch = part.match(/^\\/getvar\\s+(?:key=)?([^\\s]+)$/i);
+      if (getVarMatch) {
+        const k = getVarMatch[1].replace(/^["']|["']$/g, '');
+        const val = getVariable(k, '');
+        lastResult = val == null ? '' : (typeof val === 'object' ? JSON.stringify(val) : String(val));
+        continue;
+      }
+      const echoMatch = part.match(/^\\/echo\\s+([\\s\\S]+)$/i);
+      if (echoMatch) {
+        const msgText = substitudeMacros(echoMatch[1].trim());
+        if (window.toastr && typeof window.toastr.info === 'function') window.toastr.info(msgText);
+        lastResult = msgText;
+        continue;
+      }
+      forwarded.push(part);
+    }
+    if (forwarded.length > 0) {
+      try {
+        window.parent.postMessage({ widgetId: WID, type: 'tavern:slash', cmd: forwarded.join(' || ') }, '*');
+      } catch(e){}
+    }
+    return Promise.resolve(lastResult);
   }
   function formatAsTavernRegexedString(str){
     return String(str || '');
   }
 
+  function findWorldbook(name){
+    if (!Array.isArray(WORLDBOOKS)) return null;
+    const target = String(name || '').trim();
+    if (!target) return WORLDBOOKS[0] || null;
+    return WORLDBOOKS.find(function(b){ return b && (b.name === target || b.id === target); }) || null;
+  }
+  function normalizeWorldbookEntryInput(raw, fallbackUid){
+    const obj = (raw && typeof raw === 'object') ? cloneDeep(raw) : {};
+    const uid = obj.uid !== undefined && obj.uid !== null && String(obj.uid) !== '' ? obj.uid : String(fallbackUid);
+    const name = typeof obj.name === 'string' ? obj.name : (typeof obj.comment === 'string' ? obj.comment : '');
+    const comment = typeof obj.comment === 'string' ? obj.comment : name;
+    const enabled = typeof obj.enabled === 'boolean' ? obj.enabled : (typeof obj.disable === 'boolean' ? !obj.disable : true);
+    const stratKeys = obj.strategy && Array.isArray(obj.strategy.keys) ? obj.strategy.keys : null;
+    const keys = Array.isArray(obj.keys) ? obj.keys.map(String) : (stratKeys ? stratKeys.map(String) : []);
+    const stratSec = obj.strategy && obj.strategy.keys_secondary && Array.isArray(obj.strategy.keys_secondary.keys) ? obj.strategy.keys_secondary.keys : null;
+    const secondaryKeys = Array.isArray(obj.secondary_keys) ? obj.secondary_keys.map(String) : (stratSec ? stratSec.map(String) : []);
+    const constant = typeof obj.constant === 'boolean' ? obj.constant : (obj.strategy && obj.strategy.type === 'constant');
+    return Object.assign({}, obj, {
+      uid: uid,
+      name: name,
+      comment: comment,
+      enabled: enabled,
+      disable: !enabled,
+      content: typeof obj.content === 'string' ? obj.content : '',
+      keys: keys,
+      secondary_keys: secondaryKeys,
+      constant: Boolean(constant),
+      selective: obj.selective !== undefined ? Boolean(obj.selective) : !constant,
+      order: typeof obj.order === 'number' ? obj.order : 100,
+      strategy: Object.assign({ type: constant ? 'constant' : 'selective', keys: keys, keys_secondary: { logic: 'and_any', keys: secondaryKeys } }, obj.strategy || {}),
+    });
+  }
+  function getWorldbookNames(){
+    return Array.isArray(WORLDBOOKS) ? WORLDBOOKS.map(function(b){ return b.name; }) : [];
+  }
+  function getCharWorldbookNames(){
+    const primary = CHAR_WORLDBOOK_NAME || (Array.isArray(WORLDBOOKS) && WORLDBOOKS.find(function(b){ return b.isEmbedded; }) ? WORLDBOOKS.find(function(b){ return b.isEmbedded; }).name : null);
+    const additional = Array.isArray(WORLDBOOKS)
+      ? WORLDBOOKS.filter(function(b){ return !b.isEmbedded && b.name !== primary; }).map(function(b){ return b.name; })
+      : [];
+    return { primary: primary, additional: additional };
+  }
+  function getWorldbook(name){
+    const book = findWorldbook(name);
+    return Promise.resolve(book ? cloneDeep(book.entries || []) : []);
+  }
+  function replaceWorldbook(name, entries){
+    const book = findWorldbook(name);
+    const normalized = Array.isArray(entries)
+      ? entries.map(function(e, idx){ return normalizeWorldbookEntryInput(e, 'wb-' + Date.now() + '-' + idx); })
+      : [];
+    if (book) {
+      book.entries = cloneDeep(normalized);
+    }
+    try {
+      window.parent.postMessage({
+        widgetId: WID,
+        type: 'tavern:worldbookReplace',
+        bookName: book ? book.name : String(name || ''),
+        entries: normalized,
+      }, '*');
+    } catch(e){}
+    return Promise.resolve(cloneDeep(normalized));
+  }
+  async function updateWorldbookWith(name, updater){
+    const current = await getWorldbook(name);
+    if (typeof updater !== 'function') return current;
+    const next = await updater(current);
+    const finalEntries = Array.isArray(next) ? next : current;
+    return replaceWorldbook(name, finalEntries);
+  }
+  async function createWorldbookEntries(name, newEntries){
+    const current = await getWorldbook(name);
+    const added = (Array.isArray(newEntries) ? newEntries : []).map(function(e, idx){
+      return normalizeWorldbookEntryInput(e, 'wb-' + Date.now() + '-' + idx + '-' + Math.random().toString(36).slice(2, 6));
+    });
+    const next = current.concat(added);
+    const saved = await replaceWorldbook(name, next);
+    return { worldbook: saved, new_entries: cloneDeep(added) };
+  }
+  async function deleteWorldbookEntries(name, predicateOrUids){
+    const current = await getWorldbook(name);
+    const isFn = typeof predicateOrUids === 'function';
+    const uidSet = !isFn && Array.isArray(predicateOrUids) ? new Set(predicateOrUids.map(String)) : null;
+    const kept = [];
+    const deleted = [];
+    for (let i = 0; i < current.length; i++){
+      const entry = current[i];
+      const shouldDelete = isFn ? Boolean(predicateOrUids(entry)) : (uidSet ? uidSet.has(String(entry.uid)) : false);
+      if (shouldDelete) deleted.push(entry);
+      else kept.push(entry);
+    }
+    const saved = await replaceWorldbook(name, kept);
+    return { worldbook: saved, deleted_entries: cloneDeep(deleted) };
+  }
+
+  function getScriptId(){ return WID; }
+  function getScriptName(){ return String(window.__TAVERN_CURRENT_SCRIPT__ || 'tavern-helper'); }
+  function getIframeName(){ return WID; }
+  function getCurrentCharacterName(){ return CHAR; }
+  function getCharData(){
+    return {
+      name: CHAR,
+      description: CHAR_DATA.description || '',
+      personality: CHAR_DATA.personality || '',
+      scenario: CHAR_DATA.scenario || '',
+      first_mes: CHAR_DATA.first_mes || '',
+      tags: Array.isArray(CHAR_DATA.tags) ? CHAR_DATA.tags.slice() : [],
+      data: {
+        name: CHAR,
+        description: CHAR_DATA.description || '',
+        personality: CHAR_DATA.personality || '',
+        scenario: CHAR_DATA.scenario || '',
+        first_mes: CHAR_DATA.first_mes || '',
+        tags: Array.isArray(CHAR_DATA.tags) ? CHAR_DATA.tags.slice() : [],
+        extensions: cloneDeep(EXT),
+      },
+    };
+  }
+
   const TavernHelper = {
     getVariables,
     getAllVariables,
+    getVariable,
     replaceVariables,
+    insertVariables,
     insertOrAssignVariables,
+    deleteVariable,
     updateVariablesWith,
     getChatMessages,
     setChatMessages,
     getCurrentMessageId,
     getLastMessageId,
     triggerSlash,
+    substitudeMacros,
+    substituteMacros,
     eventOn,
     eventOnce,
     eventEmit,
+    eventMakeLast,
+    eventMakeFirst,
     eventRemoveListener,
+    eventClearEvent,
+    eventClearAll,
     formatAsTavernRegexedString,
+    getWorldbookNames,
+    getCharWorldbookNames,
+    getWorldbook,
+    replaceWorldbook,
+    updateWorldbookWith,
+    createWorldbookEntries,
+    deleteWorldbookEntries,
+    getLorebookEntries: getWorldbook,
+    setLorebookEntries: replaceWorldbook,
+    createLorebookEntries: createWorldbookEntries,
+    deleteLorebookEntries: deleteWorldbookEntries,
+    getScriptId,
+    getScriptName,
+    getIframeName,
+    getCurrentCharacterName,
+    getCharData,
   };
   const SillyTavern = {
     getContext: function(){
@@ -564,7 +916,7 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
         chatId: 'default',
         onlineStatus: 'connected',
         getCurrentChatId: function(){ return 'default'; },
-        characters: [{ name: CHAR, data: { name: CHAR, extensions: EXT } }],
+        characters: [getCharData()],
         chat: CHAT,
         chatMetadata: { variables: getVariables() },
       };
@@ -979,21 +1331,56 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
     GENERATION_ENDED: 'GENERATION_ENDED',
     GENERATION_STOPPED: 'GENERATION_STOPPED',
   };
+  const iframe_events = {
+    MESSAGE_IFRAME_RENDER_STARTED: 'MESSAGE_IFRAME_RENDER_STARTED',
+    MESSAGE_IFRAME_RENDER_ENDED: 'MESSAGE_IFRAME_RENDER_ENDED',
+    GENERATION_STARTED: 'GENERATION_STARTED',
+    GENERATION_ENDED: 'GENERATION_ENDED',
+    STREAM_TOKEN_RECEIVED_FULLY: 'STREAM_TOKEN_RECEIVED_FULLY',
+    STREAM_TOKEN_RECEIVED_INCREMENTALLY: 'STREAM_TOKEN_RECEIVED_INCREMENTALLY',
+  };
+  TavernHelper.tavern_events = tavern_events;
+  TavernHelper.iframe_events = iframe_events;
 
   window.triggerSlash = triggerSlash;
   window.getVariables = getVariables;
   window.getAllVariables = getAllVariables;
+  window.getVariable = getVariable;
   window.replaceVariables = replaceVariables;
+  window.insertVariables = insertVariables;
   window.insertOrAssignVariables = insertOrAssignVariables;
+  window.deleteVariable = deleteVariable;
   window.updateVariablesWith = updateVariablesWith;
   window.getChatMessages = getChatMessages;
   window.setChatMessages = setChatMessages;
   window.getCurrentMessageId = getCurrentMessageId;
   window.getLastMessageId = getLastMessageId;
+  window.substitudeMacros = substitudeMacros;
+  window.substituteMacros = substituteMacros;
   window.eventOn = eventOn;
   window.eventOnce = eventOnce;
   window.eventEmit = eventEmit;
+  window.eventMakeLast = eventMakeLast;
+  window.eventMakeFirst = eventMakeFirst;
   window.eventRemoveListener = eventRemoveListener;
+  window.eventClearEvent = eventClearEvent;
+  window.eventClearAll = eventClearAll;
+  window.getWorldbookNames = getWorldbookNames;
+  window.getCharWorldbookNames = getCharWorldbookNames;
+  window.getWorldbook = getWorldbook;
+  window.replaceWorldbook = replaceWorldbook;
+  window.updateWorldbookWith = updateWorldbookWith;
+  window.createWorldbookEntries = createWorldbookEntries;
+  window.deleteWorldbookEntries = deleteWorldbookEntries;
+  window.getLorebookEntries = getWorldbook;
+  window.setLorebookEntries = replaceWorldbook;
+  window.createLorebookEntries = createWorldbookEntries;
+  window.deleteLorebookEntries = deleteWorldbookEntries;
+  window.getScriptId = getScriptId;
+  window.getScriptName = getScriptName;
+  window.getIframeName = getIframeName;
+  window.getCurrentCharacterName = getCurrentCharacterName;
+  window.getCharData = getCharData;
   window.TavernHelper = TavernHelper;
   window.SillyTavern = SillyTavern;
   window.Mvu = Mvu;
@@ -1001,12 +1388,21 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
   window.waitGlobalInitialized = waitGlobalInitialized;
   window.errorCatched = errorCatched;
   window.tavern_events = tavern_events;
+  window.iframe_events = iframe_events;
   window.jQuery = jQueryShim;
   window.$ = jQueryShim;
 
   window.addEventListener('message', function(evt){
     const msg = evt && evt.data;
     if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'tavern:worldbookSync' && Array.isArray(msg.worldbooks)) {
+      WORLDBOOKS = cloneDeep(msg.worldbooks);
+      return;
+    }
+    if (msg.type === 'tavern:chatChanged') {
+      eventEmit(tavern_events.CHAT_CHANGED, msg.chatId || 'default');
+      return;
+    }
     if (msg.type === 'tavern:statSync' && msg.statData && typeof msg.statData === 'object') {
       const prevSnap = makeMvuSnapshot(STAT);
       STAT = cloneDeep(msg.statData);
@@ -1023,7 +1419,12 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
         emitMvuEvent(MVU_EVENTS.VARIABLE_UPDATE_ENDED, finalSnap, prevSnap);
       }
       eventEmit('VARIABLES_UPDATED', STAT);
-      eventEmit('MESSAGE_RECEIVED', STAT);
+      eventEmit(tavern_events.MESSAGE_RECEIVED, typeof msg.lastMessageId === 'number' ? msg.lastMessageId : getLastMessageId());
+      if (msg.turnCountChanged) {
+        const lid = typeof msg.lastMessageId === 'number' ? msg.lastMessageId : getLastMessageId();
+        eventEmit(tavern_events.GENERATION_ENDED, lid);
+        eventEmit(tavern_events.CHARACTER_MESSAGE_RENDERED, lid);
+      }
       postH();
     }
   });

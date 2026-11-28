@@ -1,5 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { buildHelperScriptsStageHtml, buildSandboxedSrcDoc, parseSlashCommandToMessage } from './sandbox-shim';
+import {
+  buildHelperScriptsStageHtml,
+  buildSandboxedSrcDoc,
+  parseSlashCommandToMessage,
+  type SandboxCharData,
+  type SandboxWorldbookEntry,
+  type SandboxWorldbookSnapshot,
+} from './sandbox-shim';
 
 export interface FrontendHtmlTemplate {
   name: string;
@@ -19,6 +26,9 @@ export interface CardFrontendPayload {
   htmlTemplates: FrontendHtmlTemplate[];
   helperScripts: HelperScriptItem[];
   customExtensions: Record<string, unknown>;
+  worldbooks?: SandboxWorldbookSnapshot[];
+  charWorldbookName?: string | null;
+  charData?: SandboxCharData;
 }
 
 interface TavernFrontendHostProps {
@@ -28,6 +38,8 @@ interface TavernFrontendHostProps {
   storyTurns: Array<{ index: number; userMessage?: string; narrative: string }>;
   onSendSlashOrMessage: (text: string) => void;
   onUpdateStatData: (nextStatData: Record<string, unknown>) => void;
+  onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[]) => void;
+  onScriptError?: (scriptName: string, message: string) => void;
 }
 
 /**
@@ -43,8 +55,11 @@ export function TavernFrontendHost({
   storyTurns,
   onSendSlashOrMessage,
   onUpdateStatData,
+  onReplaceWorldbook,
+  onScriptError,
 }: TavernFrontendHostProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const prevTurnCountRef = useRef<number>(storyTurns.length);
   const [selectedTemplateIdx, setSelectedTemplateIdx] = useState(0);
   const [mountMode, setMountMode] = useState<'none' | 'html' | 'helper'>('none');
   const [mountRevision, setMountRevision] = useState(0);
@@ -64,26 +79,47 @@ export function TavernFrontendHost({
         if (parsed) onSendSlashOrMessage(parsed);
       } else if (msg.type === 'tavern:updateStat' && msg.statData && typeof msg.statData === 'object') {
         onUpdateStatData(msg.statData as Record<string, unknown>);
+      } else if (msg.type === 'tavern:worldbookReplace' && typeof msg.bookName === 'string' && Array.isArray(msg.entries)) {
+        onReplaceWorldbook?.(msg.bookName, msg.entries as SandboxWorldbookEntry[]);
+      } else if (msg.type === 'tavern:scriptError' && typeof msg.message === 'string') {
+        const name = typeof msg.scriptName === 'string' ? msg.scriptName : 'script';
+        setHostLog(`脚本异常 [${name}]：${msg.message}`);
+        onScriptError?.(name, msg.message);
       } else if (msg.type === 'tavern:toast' && typeof msg.text === 'string' && msg.text.trim()) {
         setHostLog(`卡片提示：${msg.text.trim()}`);
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [widgetId, onSendSlashOrMessage, onUpdateStatData]);
+  }, [widgetId, onSendSlashOrMessage, onUpdateStatData, onReplaceWorldbook, onScriptError]);
 
   // Push live stat updates to mounted iframe without remounting
   useEffect(() => {
     if (mountMode === 'none') return;
+    const turnCountChanged = storyTurns.length !== prevTurnCountRef.current;
+    prevTurnCountRef.current = storyTurns.length;
+    const lastMessageId = storyTurns.length > 0 ? storyTurns[storyTurns.length - 1].index : 0;
     try {
       iframeRef.current?.contentWindow?.postMessage(
-        { type: 'tavern:statSync', statData },
+        { type: 'tavern:statSync', statData, turnCountChanged, lastMessageId },
         '*',
       );
     } catch {
       // ignore
     }
-  }, [statData, storyTurns.length, mountMode]);
+  }, [statData, storyTurns, mountMode]);
+
+  useEffect(() => {
+    if (mountMode === 'none' || !frontend.worldbooks) return;
+    try {
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: 'tavern:worldbookSync', worldbooks: frontend.worldbooks },
+        '*',
+      );
+    } catch {
+      // ignore
+    }
+  }, [frontend.worldbooks, mountMode]);
 
   const srcDoc = useMemo(() => {
     if (mountMode === 'none') return '';
@@ -97,6 +133,9 @@ export function TavernFrontendHost({
         statData,
         storyTurns,
         customExtensions: frontend.customExtensions,
+        worldbooks: frontend.worldbooks,
+        charWorldbookName: frontend.charWorldbookName,
+        charData: frontend.charData,
       });
     }
     // Helper scripts mode: wrap all enabled helper scripts inside an isolated stage document
@@ -108,6 +147,9 @@ export function TavernFrontendHost({
       statData,
       storyTurns,
       customExtensions: frontend.customExtensions,
+      worldbooks: frontend.worldbooks,
+      charWorldbookName: frontend.charWorldbookName,
+      charData: frontend.charData,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mountMode, mountRevision, selectedTemplateIdx, frontend, widgetId, userName]);

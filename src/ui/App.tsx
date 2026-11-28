@@ -8,7 +8,7 @@ import { MvuTreeView } from './MvuTreeView';
 import { TavernFrontendHost, type CardFrontendPayload } from './TavernFrontendHost';
 import { MvuZodRuntimeHost } from './MvuZodRuntimeHost';
 import { FloorRenderer } from './FloorRenderer';
-import { isProseBeautifierScript } from './sandbox-shim';
+import { isProseBeautifierScript, type SandboxWorldbookEntry } from './sandbox-shim';
 import { unpackCharacterCardPng } from './png-unpack';
 
 if (typeof window !== 'undefined') {
@@ -197,6 +197,7 @@ export function AppView() {
   const pendingBaseLastTurnIdRef = useRef<string | null>(null);
   const [cardFrontend, setCardFrontend] = useState<CardFrontendPayload | null>(null);
   const [mvuSchemaCount, setMvuSchemaCount] = useState<number>(0);
+  const [scriptErrors, setScriptErrors] = useState<Array<{ scriptName: string; message: string; at: string }>>([]);
   const [jumpingGreeting, setJumpingGreeting] = useState<boolean>(false);
   const [jumpGreetingInput, setJumpGreetingInput] = useState<string>('');
   const [showPresetRegexList, setShowPresetRegexList] = useState<boolean>(false);
@@ -657,6 +658,7 @@ export function AppView() {
   useEffect(() => {
     setCardFrontend(null);
     setMvuSchemaCount(0);
+    setScriptErrors([]);
   }, [activeCard?.id]);
 
   // Extract enabled SillyTavern `#chat .mes .mes_text` prose-beautifier scripts for FloorRenderer
@@ -702,6 +704,31 @@ export function AppView() {
   const handleSilentStatUpdate = useCallback((nextStat: Record<string, unknown>) => {
     callTool('story_app_set_stat_data', { statData: nextStat });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleReplaceWorldbook = useCallback((bookName: string, entries: SandboxWorldbookEntry[]) => {
+    setCardFrontend((prev) => {
+      if (!prev || !Array.isArray(prev.worldbooks)) return prev;
+      return {
+        ...prev,
+        worldbooks: prev.worldbooks.map((b) =>
+          b.name === bookName || b.id === bookName ? { ...b, entries } : b,
+        ),
+      };
+    });
+    callTool('story_app_replace_worldbook_entries', { bookName, entries });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleScriptError = useCallback((scriptName: string, message: string) => {
+    setScriptErrors((prev) => {
+      const exists = prev.some((e) => e.scriptName === scriptName && e.message === message);
+      if (exists) return prev;
+      return [
+        { scriptName, message, at: new Date().toLocaleTimeString() },
+        ...prev,
+      ].slice(0, 10);
+    });
   }, []);
 
   const groupedPresetSections = useMemo(() => {
@@ -775,9 +802,12 @@ export function AppView() {
         frontend={cardFrontend && activeCard && cardFrontend.cardId === activeCard.id ? cardFrontend : null}
         statData={data.statData ?? {}}
         userName={data.config.userName || 'User'}
+        chatSlot={data.activeChatSlot}
         storyTurns={data.storyTurns ?? []}
         onUpdateStatData={handleSilentStatUpdate}
+        onReplaceWorldbook={handleReplaceWorldbook}
         onSchemaCountChange={setMvuSchemaCount}
+        onScriptError={handleScriptError}
       />
       <div className="header">
         <div className="header-title">
@@ -968,6 +998,8 @@ export function AppView() {
                       storyTurns={allStoryTurns}
                       greetings={allGreetings}
                       activeGreetingIndex={gIdx}
+                      worldbooks={cardFrontend?.cardId === activeCard.id ? cardFrontend.worldbooks : undefined}
+                      charWorldbookName={cardFrontend?.cardId === activeCard.id ? cardFrontend.charWorldbookName : undefined}
                       onSendMessage={sendTextToChat}
                       onSetInput={(txt) => {
                         composerTextRef.current = txt;
@@ -977,6 +1009,7 @@ export function AppView() {
                       onUpdateStatData={(nextStat) =>
                         callTool('story_app_set_stat_data', { statData: nextStat })
                       }
+                      onReplaceWorldbook={handleReplaceWorldbook}
                       onSelectGreeting={selectGreeting}
                     />
                   )}
@@ -1149,6 +1182,8 @@ export function AppView() {
                         userName={data.config.userName || 'User'}
                         statData={data.statData ?? {}}
                         storyTurns={data.storyTurns ?? []}
+                        worldbooks={cardFrontend?.cardId === activeCard?.id ? cardFrontend.worldbooks : undefined}
+                        charWorldbookName={cardFrontend?.cardId === activeCard?.id ? cardFrontend.charWorldbookName : undefined}
                         onSendMessage={sendTextToChat}
                         onSetInput={(txt) => {
                           composerTextRef.current = txt;
@@ -1158,6 +1193,7 @@ export function AppView() {
                         onUpdateStatData={(nextStat) =>
                           callTool('story_app_set_stat_data', { statData: nextStat })
                         }
+                        onReplaceWorldbook={handleReplaceWorldbook}
                       />
                     )}
                   </div>
@@ -2197,6 +2233,8 @@ export function AppView() {
                     onUpdateStatData={(nextStat) =>
                       callTool('story_app_set_stat_data', { statData: nextStat })
                     }
+                    onReplaceWorldbook={handleReplaceWorldbook}
+                    onScriptError={handleScriptError}
                   />
                 ) : (
                   <div className="card-box">
@@ -2238,6 +2276,32 @@ export function AppView() {
                     </div>
                   </div>
                 )
+              )}
+
+              {scriptErrors.length > 0 && (
+                <div className="card-box">
+                  <details>
+                    <summary className="row" style={{ cursor: 'pointer' }}>
+                      <strong>⚠️ 助手脚本运行异常 ({scriptErrors.length})</strong>
+                      <button
+                        className="btn btn-xs"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setScriptErrors([]);
+                        }}
+                      >
+                        清空
+                      </button>
+                    </summary>
+                    <div className="muted" style={{ marginTop: 6, fontSize: 12, lineHeight: 1.5 }}>
+                      {scriptErrors.map((err, idx) => (
+                        <div key={idx} style={{ marginBottom: 4, wordBreak: 'break-word' }}>
+                          <code>[{err.at}] {err.scriptName}</code>：{err.message}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </div>
               )}
 
               <div className="card-box">

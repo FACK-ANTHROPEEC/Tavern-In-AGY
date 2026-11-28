@@ -2,8 +2,11 @@
 
 ## 1. 当前状态与里程碑
 - **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agents `story-director`/`story-writer`）打造的本地互动小说与角色扮演创作引擎（Apache-2.0，零反代、零凭据抽取）。
-- **当前阶段**：**v0.8.1**（已发布 GitHub Release；删除旧 `v0.8.0`），全量 12 套件 / 64 用例全绿，本地插件已同步最新构建。
+- **当前阶段**：**v0.8.2**（已推送 GitHub 并打 `v0.8.2` 标签），全量 12 套件 / 65 用例全绿，本地插件已同步最新构建。
 - **最近完成**：
+  - **酒馆助手（JS-Slash-Runner）第一/二梯队高性价比 API 补齐**：
+    - `sandbox-shim.ts`：补齐 `TavernHelper.tavern_events`/`iframe_events`、`eventMakeFirst`/`eventMakeLast`/`eventClearEvent`/`eventClearAll`、`insertVariables`/`deleteVariable`/`getVariable`/双签名 `insertOrAssignVariables`、`substitudeMacros`/`substituteMacros`、`getScriptId`/`getScriptName`/`getIframeName`/`getCurrentCharacterName`/`getCharData`、`/setvar`/`/addvar`/`/getvar`/`/echo` 本地斜杠执行、完整世界书读写 API（`getWorldbookNames`/`getCharWorldbookNames`/`getWorldbook`/`replaceWorldbook`/`updateWorldbookWith`/`createWorldbookEntries`/`deleteWorldbookEntries` 及 `Lorebook` 别名）与 `tavern:scriptError` 异常上报；
+    - `mcp-server.ts` / `MvuZodRuntimeHost.tsx` / `TavernFrontendHost.tsx` / `FloorRenderer.tsx` / `App.tsx`：打通 `story_app_get_card_frontend` 世界书快照下发、`story_app_replace_worldbook_entries` 写回落盘、`GENERATION_ENDED`/`CHARACTER_MESSAGE_RENDERED`/`CHAT_CHANGED` 事件派发，并在状态页新增脚本异常折叠提示条。
   - **写手纯净瘦身与摘要防泄漏**：
     - `story-writer.md` 移除工程/工具禁用说教，精简为无 `tools:` 声明的纯净英文写作说明；`story-director.md`/`hook-pre-invocation.ts` 精简派单文案；`preset-parser.ts` 移除 `[Assistant Continuation Anchor]` 硬包装；
     - `memory-engine.ts`/`prompt-assembler.ts` 温和约定 `<memory_summary>` 写入 `story_commit_turn(narrative)` 内部，主聊仅留一行楼层索引。
@@ -27,7 +30,7 @@
     - 前端与安全：`sandbox-shim.ts` 修复 `runRegisteredSchemas` 返回旧 `STAT`；`regex-engine.ts` 修复 `sanitizeStaticHtml` 脚本体残留与折叠标签内占位符转义；`App.tsx` 补齐中文输入法 `isComposing`、`sendingRef`、草稿恢复、弹窗失败不关窗、切卡防串台与三处 iframe `evt.source` 校验。
   - **`/rp` 快捷入口与单窗口零污染隔离**：技能重命名为 `/rp`（`plugin/skills/rp/SKILL.md`），`SessionRuntime.rpModeActive` 按 `conversationId` 隔离，普通编程窗口 100% 零注入，`/rp off` 随时退出。
   - **v0.8.0 记忆插件基础版 + 16 项高危审计修复**：独立「记忆」Tab + 滑动窗口逐楼小总结；修复导演写手隔离/防重、`</script>` 沙箱逃逸、XSS/正则/高度回环/载荷预算/并发写入等问题。
-- **验证状态**：`npm test` **12 套件 / 64 用例全绿（0 skipped）**；`npm run build` & `npm run install:plugin` 通过。
+- **验证状态**：`npm test` **12 套件 / 65 用例全绿（0 skipped）**；`npm run build` & `npm run install:plugin` 通过。
 
 ## 2. 架构约束与关键契约
 - **目录与分层红线**：

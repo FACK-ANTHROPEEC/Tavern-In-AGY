@@ -242,4 +242,147 @@ describe('sandbox-shim inline script escape safety', () => {
     // Must parse as 100% valid JavaScript with zero SyntaxError
     expect(() => new Function(shimJs)).not.toThrow();
   });
+
+  it('executes Tier-1 & Tier-2 JS-Slash-Runner APIs (variables, macros, slash, events, worldbooks)', async () => {
+    const vm = await import('node:vm');
+    const doc = buildSandboxedSrcDoc('<div id="ok"></div>', {
+      widgetId: 'w-test-api',
+      charName: 'Alice',
+      userName: 'Master',
+      statData: { hp: 100, nested: { a: 1 } },
+      currentMessageId: 2,
+      storyTurns: [{ index: 1, narrative: 'Turn 1' }, { index: 2, narrative: 'Turn 2' }],
+      charWorldbookName: 'AliceBook',
+      charData: { name: 'Alice', description: 'Heroine', tags: ['rpg'] },
+      worldbooks: [
+        {
+          id: 'wb-1',
+          name: 'AliceBook',
+          isEmbedded: true,
+          entries: [
+            { uid: '1', name: 'Origin', comment: 'Origin', enabled: true, content: 'Born in spring', keys: ['spring'], constant: false, order: 10 },
+          ],
+        },
+        {
+          id: 'wb-2',
+          name: 'GlobalLore',
+          isEmbedded: false,
+          entries: [],
+        },
+      ],
+    });
+
+    const firstOpen = doc.indexOf('<script>');
+    const firstClose = doc.indexOf('</script>');
+    const shimJs = doc.slice(firstOpen + '<script>'.length, firstClose);
+
+    const posted: Array<Record<string, unknown>> = [];
+    const msgListeners: Array<(evt: { data: unknown }) => void> = [];
+    const fakeWindow: Record<string, unknown> = {
+      parent: { postMessage: (msg: Record<string, unknown>) => posted.push(msg) },
+      addEventListener: (type: string, fn: (evt: { data: unknown }) => void) => {
+        if (type === 'message') msgListeners.push(fn);
+      },
+      innerHeight: 600,
+      scrollY: 0,
+      getComputedStyle: () => ({ paddingBottom: '0', marginBottom: '0', position: 'static', display: 'block', getPropertyValue: () => '' }),
+    };
+    const fakeDoc = {
+      readyState: 'complete',
+      body: { children: [], offsetHeight: 100 },
+      addEventListener: () => {},
+      dispatchEvent: () => {},
+      querySelectorAll: () => [],
+    };
+    const sandbox = vm.createContext({
+      window: fakeWindow,
+      document: fakeDoc,
+      console,
+      setTimeout,
+      clearTimeout,
+      Promise,
+      Map,
+      Set,
+      Symbol,
+      JSON,
+      Object,
+      Array,
+      Number,
+      String,
+      Boolean,
+      Math,
+      Date,
+      RegExp,
+      Element: class {},
+      NodeList: class {},
+      HTMLCollection: class {},
+      Event: class { constructor(public type: string) {} },
+    });
+    vm.runInContext(shimJs, sandbox);
+
+    const TH = fakeWindow.TavernHelper as Record<string, any>;
+    expect(TH.tavern_events.GENERATION_ENDED).toBe('GENERATION_ENDED');
+    expect(TH.iframe_events.GENERATION_ENDED).toBe('GENERATION_ENDED');
+    expect(TH.getScriptId()).toBe('w-test-api');
+    expect(TH.getCurrentCharacterName()).toBe('Alice');
+    expect(TH.getCharData().description).toBe('Heroine');
+
+    // Variable APIs: insertVariables does not overwrite existing keys, path insertOrAssignVariables & deleteVariable work
+    TH.insertVariables({ hp: 999, mp: 50, nested: { a: 2, b: 3 } });
+    expect(TH.getVariable('hp')).toBe(100);
+    expect(TH.getVariable('mp')).toBe(50);
+    expect(TH.getVariable('nested.a')).toBe(1);
+    expect(TH.getVariable('nested.b')).toBe(3);
+
+    TH.insertOrAssignVariables('stat_data.hp', 80);
+    expect(TH.getVariable('hp')).toBe(80);
+    const delRes = TH.deleteVariable('mp');
+    expect(delRes.delete_occurred).toBe(true);
+    expect(TH.getVariable('mp')).toBeUndefined();
+
+    // Macros
+    expect(TH.substitudeMacros('{{char}} greets {{user}} (HP={{getvar::hp}}, id={{lastMessageId}})')).toBe(
+      'Alice greets Master (HP=80, id=2)',
+    );
+    expect(TH.substituteMacros('{{char}}')).toBe('Alice');
+
+    // Slash commands (/setvar, /addvar, /getvar, /echo)
+    const slashOut = await TH.triggerSlash('/setvar key=gold 50 || /addvar key=gold 25 || /getvar key=gold');
+    expect(slashOut).toBe('75');
+    expect(TH.getVariable('gold')).toBe(75);
+    await TH.triggerSlash('/echo Hello {{char}}');
+    expect(posted.some((m) => m.type === 'tavern:toast' && m.text === 'Hello Alice')).toBe(true);
+
+    // Events ordering & lifecycle dispatch on turnCountChanged
+    const order: string[] = [];
+    TH.eventOn(TH.tavern_events.GENERATION_ENDED, (id: number) => order.push(`second:${id}`));
+    TH.eventMakeFirst(TH.tavern_events.GENERATION_ENDED, (id: number) => order.push(`first:${id}`));
+    for (const l of msgListeners) {
+      l({ data: { type: 'tavern:statSync', statData: { hp: 70 }, turnCountChanged: true, lastMessageId: 3 } });
+    }
+    expect(order).toEqual(['first:3', 'second:3']);
+
+    // Worldbook read/write APIs
+    expect(TH.getWorldbookNames()).toEqual(['AliceBook', 'GlobalLore']);
+    expect(TH.getCharWorldbookNames()).toEqual({ primary: 'AliceBook', additional: ['GlobalLore'] });
+    const initialWb = await TH.getWorldbook('AliceBook');
+    expect(initialWb).toHaveLength(1);
+    expect(initialWb[0].name).toBe('Origin');
+
+    const created = await TH.createWorldbookEntries('AliceBook', [{ name: 'Sword', keys: ['sword'], content: 'Sharp blade' }]);
+    expect(created.worldbook).toHaveLength(2);
+    expect(created.new_entries[0].name).toBe('Sword');
+
+    await TH.updateWorldbookWith('AliceBook', (entries: Array<Record<string, unknown>>) => {
+      entries[0].content = 'Updated origin';
+      return entries;
+    });
+    const afterUpdate = await TH.getWorldbook('AliceBook');
+    expect(afterUpdate[0].content).toBe('Updated origin');
+
+    const delWb = await TH.deleteWorldbookEntries('AliceBook', (e: Record<string, unknown>) => e.name === 'Sword');
+    expect(delWb.deleted_entries).toHaveLength(1);
+    expect(delWb.worldbook).toHaveLength(1);
+    expect(posted.some((m) => m.type === 'tavern:worldbookReplace' && m.bookName === 'AliceBook')).toBe(true);
+  });
 });
