@@ -2,11 +2,12 @@
 
 ## 1. 当前状态与里程碑
 - **项目基底**：`TavernInAGY` — 基于 Antigravity 原生插件体系（MCP Apps + Local MCP Server + Lifecycle Hooks + Skill + Custom Agents `story-director`/`story-writer`）打造的本地互动小说与角色扮演创作引擎（Apache-2.0，零反代、零凭据抽取）。
-- **当前阶段**：**v0.8.2**（已推送 GitHub 并更新 `v0.8.2` 标签），全量 12 套件 / 66 用例全绿，本地插件已同步最新构建。
+- **当前阶段**：**v0.8.2**（已推送 GitHub 并更新 `v0.8.2` 标签），全量 12 套件 / 67 用例全绿，本地插件已同步最新构建。
 - **最近完成**：
-  - **P0-1 侧栏暂存跨轮劫持根治 + 沙箱运行时 3 项防呆修复**：
+  - **P0-1 侧栏暂存跨轮劫持根治 + 沙箱世界书按需零截断拉取**：
     - `hook-pre-invocation.ts`：严格校验 `isSidePanePlaceholder`（`第 #N 楼 · 开始演绎`）才允许提升 `stagedSidePaneInput`，主窗口直接输入真实文本、`/rp` 绑定及未绑定窗口收到占位符时立即清理残留暂存；
-    - `TavernFrontendHost.tsx`：`srcDoc` 依赖锁定原始 `cardId`/`cardName`，修复写世界书触发 iframe 重载；`MvuZodRuntimeHost.tsx` 切卡/加载时重置 `prevTurnCountRef` 防 `GENERATION_ENDED` 误发；`mcp-server.ts` 给世界书快照加 350 KB 预算上限防撞 1 MiB 限制。
+    - `TavernFrontendHost.tsx`：`srcDoc` 依赖锁定原始 `cardId`/`cardName`，修复写世界书触发 iframe 重载；`MvuZodRuntimeHost.tsx` 切卡/加载时重置 `prevTurnCountRef` 防 `GENERATION_ENDED` 误发；
+    - `mcp-server.ts` / `sandbox-shim.ts` / `App.tsx`：世界书改为启动只传轻量 `worldbookNames`，`getWorldbook(name)` 按需走 `story_app_get_worldbook` 完整异步拉取（零截断、不撑爆启动载荷、拉取失败禁止空数组覆盖落盘）。
   - **酒馆助手（JS-Slash-Runner）第一/二梯队高性价比 API 补齐**：
     - `sandbox-shim.ts`：补齐 `TavernHelper.tavern_events`/`iframe_events`、`eventMakeFirst`/`eventMakeLast`/`eventClearEvent`/`eventClearAll`、`insertVariables`/`deleteVariable`/`getVariable`/双签名 `insertOrAssignVariables`、`substitudeMacros`/`substituteMacros`、`getScriptId`/`getScriptName`/`getIframeName`/`getCurrentCharacterName`/`getCharData`、`/setvar`/`/addvar`/`/getvar`/`/echo` 本地斜杠执行、完整世界书读写 API（`getWorldbookNames`/`getCharWorldbookNames`/`getWorldbook`/`replaceWorldbook`/`updateWorldbookWith`/`createWorldbookEntries`/`deleteWorldbookEntries` 及 `Lorebook` 别名）与 `tavern:scriptError` 异常上报；
     - `mcp-server.ts` / `MvuZodRuntimeHost.tsx` / `TavernFrontendHost.tsx` / `FloorRenderer.tsx` / `App.tsx`：打通 `story_app_get_card_frontend` 世界书快照下发、`story_app_replace_worldbook_entries` 写回落盘、`GENERATION_ENDED`/`CHARACTER_MESSAGE_RENDERED`/`CHAT_CHANGED` 事件派发，并在状态页新增脚本异常折叠提示条。
@@ -33,7 +34,7 @@
     - 前端与安全：`sandbox-shim.ts` 修复 `runRegisteredSchemas` 返回旧 `STAT`；`regex-engine.ts` 修复 `sanitizeStaticHtml` 脚本体残留与折叠标签内占位符转义；`App.tsx` 补齐中文输入法 `isComposing`、`sendingRef`、草稿恢复、弹窗失败不关窗、切卡防串台与三处 iframe `evt.source` 校验。
   - **`/rp` 快捷入口与单窗口零污染隔离**：技能重命名为 `/rp`（`plugin/skills/rp/SKILL.md`），`SessionRuntime.rpModeActive` 按 `conversationId` 隔离，普通编程窗口 100% 零注入，`/rp off` 随时退出。
   - **v0.8.0 记忆插件基础版 + 16 项高危审计修复**：独立「记忆」Tab + 滑动窗口逐楼小总结；修复导演写手隔离/防重、`</script>` 沙箱逃逸、XSS/正则/高度回环/载荷预算/并发写入等问题。
-- **验证状态**：`npm test` **12 套件 / 66 用例全绿（0 skipped）**；`npm run build` & `npm run install:plugin` 通过。
+- **验证状态**：`npm test` **12 套件 / 67 用例全绿（0 skipped）**；`npm run build` & `npm run install:plugin` 通过。
 
 ## 2. 架构约束与关键契约
 - **目录与分层红线**：

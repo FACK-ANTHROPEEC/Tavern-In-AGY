@@ -913,7 +913,7 @@ server.registerTool(
           htmlTemplates: [],
           helperScripts: [],
           customExtensions: {},
-          worldbooks: [],
+          worldbookNames: [],
           charWorldbookName: null,
         },
       };
@@ -934,42 +934,16 @@ server.registerTool(
       ...(card.tavernHelperScripts ?? []).filter((s) => s.enabled),
     ];
 
-    const MAX_WORLDBOOK_SNAPSHOT_CHARS = 350_000;
-    let remainingWbBudget = MAX_WORLDBOOK_SNAPSHOT_CHARS;
-    const worldbooks: Array<{
-      id: string;
-      name: string;
-      isEmbedded?: boolean;
-      entries: ReturnType<typeof serializeWorldbookEntryForSandbox>[];
-    }> = [];
-    if (card.embeddedLorebook) {
-      const serialized = card.embeddedLorebook.entries.map(serializeWorldbookEntryForSandbox);
-      const approxLen = JSON.stringify(serialized).length;
-      if (approxLen <= remainingWbBudget) {
-        remainingWbBudget -= approxLen;
-        worldbooks.push({
-          id: card.embeddedLorebook.id,
-          name: card.embeddedLorebook.name,
-          isEmbedded: true,
-          entries: serialized,
-        });
-      }
+    // Send only lightweight worldbook names at bootstrap; full entries are fetched on-demand via
+    // `story_app_get_worldbook` so huge worldbooks are never truncated or bloat startup payloads.
+    const worldbookNames: string[] = [];
+    if (card.embeddedLorebook?.name) {
+      worldbookNames.push(card.embeddedLorebook.name);
     }
     for (const lbId of config.activeLorebookIds) {
-      if (remainingWbBudget <= 0) break;
       const lb = storage.getLorebook(lbId);
-      if (lb) {
-        const serialized = lb.entries.map(serializeWorldbookEntryForSandbox);
-        const approxLen = JSON.stringify(serialized).length;
-        if (approxLen <= remainingWbBudget) {
-          remainingWbBudget -= approxLen;
-          worldbooks.push({
-            id: lb.id,
-            name: lb.name,
-            isEmbedded: false,
-            entries: serialized,
-          });
-        }
+      if (lb?.name && !worldbookNames.includes(lb.name)) {
+        worldbookNames.push(lb.name);
       }
     }
 
@@ -981,7 +955,7 @@ server.registerTool(
         htmlTemplates,
         helperScripts,
         customExtensions: card.customExtensions ?? {},
-        worldbooks,
+        worldbookNames,
         charWorldbookName: card.embeddedLorebook?.name ?? null,
         charData: {
           name: card.name,
@@ -991,6 +965,58 @@ server.registerTool(
           first_mes: card.firstMessage,
           tags: card.tags,
         },
+      },
+    };
+  },
+);
+
+server.registerTool(
+  'story_app_get_worldbook',
+  {
+    title: 'Get Single Worldbook Entries On Demand',
+    description: 'Fetch full untruncated entries for a single worldbook (embedded or external) when requested by sandbox getWorldbook().',
+    inputSchema: {
+      bookName: z.string(),
+    },
+    _meta: APP_ONLY_META,
+  },
+  async ({ bookName }) => {
+    const config = storage.getConfig();
+    const target = bookName.trim();
+    const card = config.activeCardId ? storage.getCard(config.activeCardId) : null;
+    if (
+      target &&
+      card?.embeddedLorebook &&
+      (card.embeddedLorebook.name === target || card.embeddedLorebook.id === target)
+    ) {
+      return {
+        content: [{ type: 'text', text: 'ok' }],
+        structuredContent: {
+          found: true,
+          bookName: card.embeddedLorebook.name,
+          entries: card.embeddedLorebook.entries.map(serializeWorldbookEntryForSandbox),
+        },
+      };
+    }
+    const matched = storage
+      .listLorebooks()
+      .find((b) => b.name === target || b.id === target);
+    if (matched) {
+      return {
+        content: [{ type: 'text', text: 'ok' }],
+        structuredContent: {
+          found: true,
+          bookName: matched.name,
+          entries: matched.entries.map(serializeWorldbookEntryForSandbox),
+        },
+      };
+    }
+    return {
+      content: [{ type: 'text', text: 'not found' }],
+      structuredContent: {
+        found: false,
+        bookName: target,
+        entries: [],
       },
     };
   },

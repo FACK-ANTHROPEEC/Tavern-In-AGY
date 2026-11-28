@@ -58,8 +58,10 @@ export interface SandboxShimOptions {
   activeGreetingIndex?: number;
   storyTurns?: Array<{ index: number; userMessage?: string; narrative: string }>;
   customExtensions?: Record<string, unknown>;
-  /** Active worldbooks (character embedded + active external lorebooks) for JS-Slash-Runner worldbook APIs */
+  /** Active worldbooks (optional preloaded snapshots for tests/inline widgets) */
   worldbooks?: SandboxWorldbookSnapshot[];
+  /** Lightweight list of active worldbook names for on-demand async getWorldbook() */
+  worldbookNames?: string[];
   /** Name of the active character's primary (embedded) worldbook, if any */
   charWorldbookName?: string | null;
   /** Active character metadata for getCharData() */
@@ -349,8 +351,27 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
   const CURRENT_ID = ${safeJsonForInlineScript(currentId)};
   const EXT = ${safeJsonForInlineScript(opts.customExtensions ?? {})};
   let WORLDBOOKS = ${safeJsonForInlineScript(opts.liteProseMode ? [] : (opts.worldbooks ?? []))};
+  let WORLDBOOK_NAMES = ${safeJsonForInlineScript(
+    opts.liteProseMode
+      ? []
+      : Array.isArray(opts.worldbookNames)
+        ? opts.worldbookNames
+        : (opts.worldbooks ?? []).map((b) => b.name),
+  )};
   const CHAR_WORLDBOOK_NAME = ${safeJsonForInlineScript(opts.charWorldbookName ?? null)};
   const CHAR_DATA = ${safeJsonForInlineScript(opts.charData ?? { name: opts.charName || 'Character' })};
+  const WORLDBOOK_CACHE = new Map();
+  const PENDING_WB_REQS = new Map();
+  let wbReqSeq = 0;
+  if (Array.isArray(WORLDBOOKS)) {
+    for (let i = 0; i < WORLDBOOKS.length; i++) {
+      const b = WORLDBOOKS[i];
+      if (b && b.name) {
+        WORLDBOOK_CACHE.set(b.name, cloneDeep(b.entries || []));
+        if (WORLDBOOK_NAMES.indexOf(b.name) === -1) WORLDBOOK_NAMES.push(b.name);
+      }
+    }
+  }
   const LISTENERS = new Map();
 
   function reportScriptError(scriptName, err){
@@ -744,11 +765,11 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
     return String(str || '');
   }
 
-  function findWorldbook(name){
-    if (!Array.isArray(WORLDBOOKS)) return null;
+  function resolveWorldbookName(name){
     const target = String(name || '').trim();
-    if (!target) return WORLDBOOKS[0] || null;
-    return WORLDBOOKS.find(function(b){ return b && (b.name === target || b.id === target); }) || null;
+    if (target) return target;
+    if (CHAR_WORLDBOOK_NAME) return CHAR_WORLDBOOK_NAME;
+    return WORLDBOOK_NAMES.length > 0 ? WORLDBOOK_NAMES[0] : '';
   }
   function normalizeWorldbookEntryInput(raw, fallbackUid){
     const obj = (raw && typeof raw === 'object') ? cloneDeep(raw) : {};
@@ -777,55 +798,99 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
     });
   }
   function getWorldbookNames(){
-    return Array.isArray(WORLDBOOKS) ? WORLDBOOKS.map(function(b){ return b.name; }) : [];
+    return WORLDBOOK_NAMES.slice();
   }
   function getCharWorldbookNames(){
-    const primary = CHAR_WORLDBOOK_NAME || (Array.isArray(WORLDBOOKS) && WORLDBOOKS.find(function(b){ return b.isEmbedded; }) ? WORLDBOOKS.find(function(b){ return b.isEmbedded; }).name : null);
-    const additional = Array.isArray(WORLDBOOKS)
-      ? WORLDBOOKS.filter(function(b){ return !b.isEmbedded && b.name !== primary; }).map(function(b){ return b.name; })
-      : [];
+    const primary = CHAR_WORLDBOOK_NAME || null;
+    const additional = WORLDBOOK_NAMES.filter(function(n){ return n !== primary; });
     return { primary: primary, additional: additional };
   }
   function getWorldbook(name){
-    const book = findWorldbook(name);
-    return Promise.resolve(book ? cloneDeep(book.entries || []) : []);
+    const target = resolveWorldbookName(name);
+    if (!target) return Promise.resolve([]);
+    if (WORLDBOOK_CACHE.has(target)) {
+      return Promise.resolve(cloneDeep(WORLDBOOK_CACHE.get(target)));
+    }
+    if (!window.parent || window.parent === window) {
+      return Promise.resolve([]);
+    }
+    return new Promise(function(resolve){
+      const reqId = 'wb-' + (++wbReqSeq) + '-' + Date.now();
+      const timer = setTimeout(function(){
+        PENDING_WB_REQS.delete(reqId);
+        resolve([]);
+      }, 4000);
+      PENDING_WB_REQS.set(reqId, {
+        bookName: target,
+        resolve: function(entries, found){
+          clearTimeout(timer);
+          if (found && Array.isArray(entries)) {
+            WORLDBOOK_CACHE.set(target, cloneDeep(entries));
+            resolve(cloneDeep(entries));
+          } else {
+            resolve([]);
+          }
+        },
+      });
+      try {
+        window.parent.postMessage({
+          widgetId: WID,
+          type: 'tavern:worldbookGet',
+          requestId: reqId,
+          bookName: target,
+        }, '*');
+      } catch(e){
+        clearTimeout(timer);
+        PENDING_WB_REQS.delete(reqId);
+        resolve([]);
+      }
+    });
   }
   function replaceWorldbook(name, entries){
-    const book = findWorldbook(name);
+    const target = resolveWorldbookName(name);
+    if (!target) return Promise.resolve([]);
     const normalized = Array.isArray(entries)
       ? entries.map(function(e, idx){ return normalizeWorldbookEntryInput(e, 'wb-' + Date.now() + '-' + idx); })
       : [];
-    if (book) {
-      book.entries = cloneDeep(normalized);
-    }
+    WORLDBOOK_CACHE.set(target, cloneDeep(normalized));
     try {
       window.parent.postMessage({
         widgetId: WID,
         type: 'tavern:worldbookReplace',
-        bookName: book ? book.name : String(name || ''),
+        bookName: target,
         entries: normalized,
       }, '*');
     } catch(e){}
     return Promise.resolve(cloneDeep(normalized));
   }
   async function updateWorldbookWith(name, updater){
-    const current = await getWorldbook(name);
+    const target = resolveWorldbookName(name);
+    const current = await getWorldbook(target);
+    if (!target || !WORLDBOOK_CACHE.has(target)) return current;
     if (typeof updater !== 'function') return current;
     const next = await updater(current);
     const finalEntries = Array.isArray(next) ? next : current;
-    return replaceWorldbook(name, finalEntries);
+    return replaceWorldbook(target, finalEntries);
   }
   async function createWorldbookEntries(name, newEntries){
-    const current = await getWorldbook(name);
+    const target = resolveWorldbookName(name);
+    const current = await getWorldbook(target);
+    if (!target || !WORLDBOOK_CACHE.has(target)) {
+      return { worldbook: current, new_entries: [] };
+    }
     const added = (Array.isArray(newEntries) ? newEntries : []).map(function(e, idx){
       return normalizeWorldbookEntryInput(e, 'wb-' + Date.now() + '-' + idx + '-' + Math.random().toString(36).slice(2, 6));
     });
     const next = current.concat(added);
-    const saved = await replaceWorldbook(name, next);
+    const saved = await replaceWorldbook(target, next);
     return { worldbook: saved, new_entries: cloneDeep(added) };
   }
   async function deleteWorldbookEntries(name, predicateOrUids){
-    const current = await getWorldbook(name);
+    const target = resolveWorldbookName(name);
+    const current = await getWorldbook(target);
+    if (!target || !WORLDBOOK_CACHE.has(target)) {
+      return { worldbook: current, deleted_entries: [] };
+    }
     const isFn = typeof predicateOrUids === 'function';
     const uidSet = !isFn && Array.isArray(predicateOrUids) ? new Set(predicateOrUids.map(String)) : null;
     const kept = [];
@@ -836,7 +901,7 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
       if (shouldDelete) deleted.push(entry);
       else kept.push(entry);
     }
-    const saved = await replaceWorldbook(name, kept);
+    const saved = await replaceWorldbook(target, kept);
     return { worldbook: saved, deleted_entries: cloneDeep(deleted) };
   }
 
@@ -1395,8 +1460,27 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
   window.addEventListener('message', function(evt){
     const msg = evt && evt.data;
     if (!msg || typeof msg !== 'object') return;
-    if (msg.type === 'tavern:worldbookSync' && Array.isArray(msg.worldbooks)) {
-      WORLDBOOKS = cloneDeep(msg.worldbooks);
+    if (msg.type === 'tavern:worldbookResponse' && typeof msg.requestId === 'string') {
+      const pending = PENDING_WB_REQS.get(msg.requestId);
+      if (pending) {
+        PENDING_WB_REQS.delete(msg.requestId);
+        pending.resolve(Array.isArray(msg.entries) ? msg.entries : [], Boolean(msg.found));
+      }
+      return;
+    }
+    if (msg.type === 'tavern:worldbookSync') {
+      if (Array.isArray(msg.worldbookNames)) {
+        WORLDBOOK_NAMES = msg.worldbookNames.slice();
+      }
+      if (Array.isArray(msg.worldbooks)) {
+        WORLDBOOKS = cloneDeep(msg.worldbooks);
+        for (let i = 0; i < WORLDBOOKS.length; i++) {
+          const b = WORLDBOOKS[i];
+          if (b && b.name) WORLDBOOK_CACHE.set(b.name, cloneDeep(b.entries || []));
+        }
+      } else if (typeof msg.bookName === 'string' && Array.isArray(msg.entries)) {
+        WORLDBOOK_CACHE.set(msg.bookName, cloneDeep(msg.entries));
+      }
       return;
     }
     if (msg.type === 'tavern:chatChanged') {

@@ -450,4 +450,64 @@ describe('sandbox-shim inline script escape safety', () => {
     expect(delWb.worldbook).toHaveLength(1);
     expect(posted.some((m) => m.type === 'tavern:worldbookReplace' && m.bookName === 'AliceBook')).toBe(true);
   });
+
+  it('fetches worldbooks on-demand via postMessage without truncation and blocks overwrite when missing', async () => {
+    const vm = await import('node:vm');
+    const doc = buildSandboxedSrcDoc('<div></div>', {
+      widgetId: 'w-ondemand',
+      charName: 'Alice',
+      userName: 'Master',
+      statData: {},
+      worldbookNames: ['HugeBook', 'MissingBook'],
+      charWorldbookName: 'HugeBook',
+    });
+    const firstOpen = doc.indexOf('<script>');
+    const firstClose = doc.indexOf('</script>');
+    const shimJs = doc.slice(firstOpen + '<script>'.length, firstClose);
+
+    const posted: Array<Record<string, unknown>> = [];
+    const msgListeners: Array<(evt: { data: unknown }) => void> = [];
+    const fakeWindow: Record<string, unknown> = {
+      parent: {
+        postMessage: (msg: Record<string, unknown>) => {
+          posted.push(msg);
+          if (msg.type === 'tavern:worldbookGet') {
+            const found = msg.bookName === 'HugeBook';
+            const entries = found ? [{ uid: '99', name: 'BigEntry', content: 'A'.repeat(1000), keys: ['big'], enabled: true }] : [];
+            setTimeout(() => {
+              for (const l of msgListeners) {
+                l({ data: { type: 'tavern:worldbookResponse', requestId: msg.requestId, bookName: msg.bookName, found, entries } });
+              }
+            }, 0);
+          }
+        },
+      },
+      addEventListener: (type: string, fn: (evt: { data: unknown }) => void) => {
+        if (type === 'message') msgListeners.push(fn);
+      },
+      innerHeight: 600,
+      scrollY: 0,
+      getComputedStyle: () => ({ paddingBottom: '0', marginBottom: '0', position: 'static', display: 'block', getPropertyValue: () => '' }),
+    };
+    const sandbox = vm.createContext({
+      window: fakeWindow,
+      document: { readyState: 'complete', body: { children: [], offsetHeight: 100 }, addEventListener: () => {}, dispatchEvent: () => {}, querySelectorAll: () => [] },
+      console, setTimeout, clearTimeout, Promise, Map, Set, Symbol, JSON, Object, Array, Number, String, Boolean, Math, Date, RegExp,
+      Element: class {}, NodeList: class {}, HTMLCollection: class {}, Event: class { constructor(public type: string) {} },
+    });
+    vm.runInContext(shimJs, sandbox);
+
+    const TH = fakeWindow.TavernHelper as Record<string, any>;
+    expect(TH.getWorldbookNames()).toEqual(['HugeBook', 'MissingBook']);
+    expect(TH.getCharWorldbookNames()).toEqual({ primary: 'HugeBook', additional: ['MissingBook'] });
+
+    const fetched = await TH.getWorldbook('HugeBook');
+    expect(fetched).toHaveLength(1);
+    expect(fetched[0].content).toHaveLength(1000);
+
+    // Missing book must NOT trigger tavern:worldbookReplace when createWorldbookEntries is called
+    const missRes = await TH.createWorldbookEntries('MissingBook', [{ name: 'ShouldNotOverwrite', content: 'x' }]);
+    expect(missRes.new_entries).toHaveLength(0);
+    expect(posted.some((m) => m.type === 'tavern:worldbookReplace' && m.bookName === 'MissingBook')).toBe(false);
+  });
 });

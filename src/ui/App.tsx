@@ -706,16 +706,31 @@ export function AppView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const handleGetWorldbook = useCallback(
+    async (bookName: string): Promise<{ found: boolean; entries: SandboxWorldbookEntry[] }> => {
+      const app = appRef.current;
+      if (!app) return { found: false, entries: [] };
+      try {
+        const res = await app.callServerTool({
+          name: 'story_app_get_worldbook',
+          arguments: { bookName },
+        });
+        if (res?.isError) return { found: false, entries: [] };
+        const sc = res?.structuredContent as
+          | { found?: boolean; entries?: SandboxWorldbookEntry[] }
+          | undefined;
+        return {
+          found: Boolean(sc?.found),
+          entries: Array.isArray(sc?.entries) ? sc.entries : [],
+        };
+      } catch {
+        return { found: false, entries: [] };
+      }
+    },
+    [],
+  );
+
   const handleReplaceWorldbook = useCallback((bookName: string, entries: SandboxWorldbookEntry[]) => {
-    setCardFrontend((prev) => {
-      if (!prev || !Array.isArray(prev.worldbooks)) return prev;
-      return {
-        ...prev,
-        worldbooks: prev.worldbooks.map((b) =>
-          b.name === bookName || b.id === bookName ? { ...b, entries } : b,
-        ),
-      };
-    });
     callTool('story_app_replace_worldbook_entries', { bookName, entries });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -805,6 +820,7 @@ export function AppView() {
         chatSlot={data.activeChatSlot}
         storyTurns={data.storyTurns ?? []}
         onUpdateStatData={handleSilentStatUpdate}
+        onGetWorldbook={handleGetWorldbook}
         onReplaceWorldbook={handleReplaceWorldbook}
         onSchemaCountChange={setMvuSchemaCount}
         onScriptError={handleScriptError}
@@ -998,7 +1014,7 @@ export function AppView() {
                       storyTurns={allStoryTurns}
                       greetings={allGreetings}
                       activeGreetingIndex={gIdx}
-                      worldbooks={cardFrontend?.cardId === activeCard.id ? cardFrontend.worldbooks : undefined}
+                      worldbookNames={cardFrontend?.cardId === activeCard.id ? cardFrontend.worldbookNames : undefined}
                       charWorldbookName={cardFrontend?.cardId === activeCard.id ? cardFrontend.charWorldbookName : undefined}
                       onSendMessage={sendTextToChat}
                       onSetInput={(txt) => {
@@ -1009,6 +1025,7 @@ export function AppView() {
                       onUpdateStatData={(nextStat) =>
                         callTool('story_app_set_stat_data', { statData: nextStat })
                       }
+                      onGetWorldbook={handleGetWorldbook}
                       onReplaceWorldbook={handleReplaceWorldbook}
                       onSelectGreeting={selectGreeting}
                     />
@@ -1182,7 +1199,7 @@ export function AppView() {
                         userName={data.config.userName || 'User'}
                         statData={data.statData ?? {}}
                         storyTurns={data.storyTurns ?? []}
-                        worldbooks={cardFrontend?.cardId === activeCard?.id ? cardFrontend.worldbooks : undefined}
+                        worldbookNames={cardFrontend?.cardId === activeCard?.id ? cardFrontend.worldbookNames : undefined}
                         charWorldbookName={cardFrontend?.cardId === activeCard?.id ? cardFrontend.charWorldbookName : undefined}
                         onSendMessage={sendTextToChat}
                         onSetInput={(txt) => {
@@ -1193,6 +1210,7 @@ export function AppView() {
                         onUpdateStatData={(nextStat) =>
                           callTool('story_app_set_stat_data', { statData: nextStat })
                         }
+                        onGetWorldbook={handleGetWorldbook}
                         onReplaceWorldbook={handleReplaceWorldbook}
                       />
                     )}
@@ -2233,6 +2251,7 @@ export function AppView() {
                     onUpdateStatData={(nextStat) =>
                       callTool('story_app_set_stat_data', { statData: nextStat })
                     }
+                    onGetWorldbook={handleGetWorldbook}
                     onReplaceWorldbook={handleReplaceWorldbook}
                     onScriptError={handleScriptError}
                   />

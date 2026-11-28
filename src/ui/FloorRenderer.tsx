@@ -29,10 +29,12 @@ interface FloorRendererProps {
   greetings?: string[];
   activeGreetingIndex?: number;
   worldbooks?: SandboxWorldbookSnapshot[];
+  worldbookNames?: string[];
   charWorldbookName?: string | null;
   onSendMessage: (text: string) => void;
   onSetInput?: (text: string) => void;
   onUpdateStatData?: (nextStatData: Record<string, unknown>) => void;
+  onGetWorldbook?: (bookName: string) => Promise<{ found: boolean; entries: SandboxWorldbookEntry[] }>;
   onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[]) => void;
   onSelectGreeting?: (index: number) => void;
 }
@@ -82,10 +84,12 @@ function InlineRegexWidget({
   greetings,
   activeGreetingIndex,
   worldbooks,
+  worldbookNames,
   charWorldbookName,
   onSendMessage,
   onSetInput,
   onUpdateStatData,
+  onGetWorldbook,
   onReplaceWorldbook,
   onSelectGreeting,
 }: {
@@ -100,10 +104,12 @@ function InlineRegexWidget({
   greetings?: string[];
   activeGreetingIndex?: number;
   worldbooks?: SandboxWorldbookSnapshot[];
+  worldbookNames?: string[];
   charWorldbookName?: string | null;
   onSendMessage: (text: string) => void;
   onSetInput?: (text: string) => void;
   onUpdateStatData?: (nextStatData: Record<string, unknown>) => void;
+  onGetWorldbook?: (bookName: string) => Promise<{ found: boolean; entries: SandboxWorldbookEntry[] }>;
   onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[]) => void;
   onSelectGreeting?: (index: number) => void;
 }) {
@@ -131,13 +137,37 @@ function InlineRegexWidget({
         }
       } else if (msg.type === 'tavern:updateStat' && msg.statData && typeof msg.statData === 'object') {
         onUpdateStatData?.(msg.statData as Record<string, unknown>);
+      } else if (msg.type === 'tavern:worldbookGet' && typeof msg.requestId === 'string' && typeof msg.bookName === 'string') {
+        const reqId = msg.requestId;
+        const bName = msg.bookName;
+        if (onGetWorldbook) {
+          onGetWorldbook(bName).then((res) => {
+            try {
+              iframeRef.current?.contentWindow?.postMessage(
+                { type: 'tavern:worldbookResponse', requestId: reqId, bookName: bName, found: res.found, entries: res.entries },
+                '*',
+              );
+            } catch {
+              // ignore
+            }
+          });
+        } else {
+          try {
+            iframeRef.current?.contentWindow?.postMessage(
+              { type: 'tavern:worldbookResponse', requestId: reqId, bookName: bName, found: false, entries: [] },
+              '*',
+            );
+          } catch {
+            // ignore
+          }
+        }
       } else if (msg.type === 'tavern:worldbookReplace' && typeof msg.bookName === 'string' && Array.isArray(msg.entries)) {
         onReplaceWorldbook?.(msg.bookName, msg.entries as SandboxWorldbookEntry[]);
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [widgetId, onSendMessage, onSetInput, onUpdateStatData, onReplaceWorldbook, onSelectGreeting]);
+  }, [widgetId, onSendMessage, onSetInput, onUpdateStatData, onGetWorldbook, onReplaceWorldbook, onSelectGreeting]);
 
   // Push live stat updates into the mounted iframe without rebuilding srcDoc
   useEffect(() => {
@@ -176,6 +206,7 @@ function InlineRegexWidget({
         activeGreetingIndex,
         storyTurns,
         worldbooks,
+        worldbookNames,
         charWorldbookName,
       }),
     // Intentionally keep statData out of srcDoc deps so live updates flow via postMessage without flickering
@@ -326,10 +357,12 @@ export function FloorRenderer({
   greetings,
   activeGreetingIndex,
   worldbooks,
+  worldbookNames,
   charWorldbookName,
   onSendMessage,
   onSetInput,
   onUpdateStatData,
+  onGetWorldbook,
   onReplaceWorldbook,
   onSelectGreeting,
 }: FloorRendererProps) {
@@ -430,10 +463,12 @@ export function FloorRenderer({
             greetings={greetings}
             activeGreetingIndex={activeGreetingIndex}
             worldbooks={worldbooks}
+            worldbookNames={worldbookNames}
             charWorldbookName={charWorldbookName}
             onSendMessage={onSendMessage}
             onSetInput={onSetInput}
             onUpdateStatData={onUpdateStatData}
+            onGetWorldbook={onGetWorldbook}
             onReplaceWorldbook={onReplaceWorldbook}
             onSelectGreeting={onSelectGreeting}
           />

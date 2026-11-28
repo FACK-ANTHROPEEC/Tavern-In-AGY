@@ -13,6 +13,7 @@ interface MvuZodRuntimeHostProps {
   chatSlot?: string;
   storyTurns: Array<{ index: number; userMessage?: string; narrative: string }>;
   onUpdateStatData: (nextStatData: Record<string, unknown>) => void;
+  onGetWorldbook?: (bookName: string) => Promise<{ found: boolean; entries: SandboxWorldbookEntry[] }>;
   onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[]) => void;
   onSchemaCountChange?: (count: number) => void;
   onScriptError?: (scriptName: string, message: string) => void;
@@ -30,6 +31,7 @@ export function MvuZodRuntimeHost({
   chatSlot,
   storyTurns,
   onUpdateStatData,
+  onGetWorldbook,
   onReplaceWorldbook,
   onSchemaCountChange,
   onScriptError,
@@ -75,6 +77,30 @@ export function MvuZodRuntimeHost({
           lastPushedJsonRef.current = nextJson;
           onUpdateStatData(msg.statData as Record<string, unknown>);
         }
+      } else if (msg.type === 'tavern:worldbookGet' && typeof msg.requestId === 'string' && typeof msg.bookName === 'string') {
+        const reqId = msg.requestId;
+        const bName = msg.bookName;
+        if (onGetWorldbook) {
+          onGetWorldbook(bName).then((res) => {
+            try {
+              iframeRef.current?.contentWindow?.postMessage(
+                { type: 'tavern:worldbookResponse', requestId: reqId, bookName: bName, found: res.found, entries: res.entries },
+                '*',
+              );
+            } catch {
+              // ignore
+            }
+          });
+        } else {
+          try {
+            iframeRef.current?.contentWindow?.postMessage(
+              { type: 'tavern:worldbookResponse', requestId: reqId, bookName: bName, found: false, entries: [] },
+              '*',
+            );
+          } catch {
+            // ignore
+          }
+        }
       } else if (msg.type === 'tavern:worldbookReplace' && typeof msg.bookName === 'string' && Array.isArray(msg.entries)) {
         onReplaceWorldbook?.(msg.bookName, msg.entries as SandboxWorldbookEntry[]);
       } else if (msg.type === 'tavern:scriptError' && typeof msg.message === 'string') {
@@ -83,7 +109,7 @@ export function MvuZodRuntimeHost({
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [widgetId, onUpdateStatData, onReplaceWorldbook, onSchemaCountChange, onScriptError]);
+  }, [widgetId, onUpdateStatData, onGetWorldbook, onReplaceWorldbook, onSchemaCountChange, onScriptError]);
 
   useEffect(() => {
     if (!scriptsSignature || !iframeLoadedRef.current) return;
@@ -141,6 +167,7 @@ export function MvuZodRuntimeHost({
       storyTurns,
       customExtensions: frontend.customExtensions,
       worldbooks: frontend.worldbooks,
+      worldbookNames: frontend.worldbookNames,
       charWorldbookName: frontend.charWorldbookName,
       charData: frontend.charData,
     });

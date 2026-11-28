@@ -27,6 +27,7 @@ export interface CardFrontendPayload {
   helperScripts: HelperScriptItem[];
   customExtensions: Record<string, unknown>;
   worldbooks?: SandboxWorldbookSnapshot[];
+  worldbookNames?: string[];
   charWorldbookName?: string | null;
   charData?: SandboxCharData;
 }
@@ -38,6 +39,7 @@ interface TavernFrontendHostProps {
   storyTurns: Array<{ index: number; userMessage?: string; narrative: string }>;
   onSendSlashOrMessage: (text: string) => void;
   onUpdateStatData: (nextStatData: Record<string, unknown>) => void;
+  onGetWorldbook?: (bookName: string) => Promise<{ found: boolean; entries: SandboxWorldbookEntry[] }>;
   onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[]) => void;
   onScriptError?: (scriptName: string, message: string) => void;
 }
@@ -55,6 +57,7 @@ export function TavernFrontendHost({
   storyTurns,
   onSendSlashOrMessage,
   onUpdateStatData,
+  onGetWorldbook,
   onReplaceWorldbook,
   onScriptError,
 }: TavernFrontendHostProps) {
@@ -79,6 +82,30 @@ export function TavernFrontendHost({
         if (parsed) onSendSlashOrMessage(parsed);
       } else if (msg.type === 'tavern:updateStat' && msg.statData && typeof msg.statData === 'object') {
         onUpdateStatData(msg.statData as Record<string, unknown>);
+      } else if (msg.type === 'tavern:worldbookGet' && typeof msg.requestId === 'string' && typeof msg.bookName === 'string') {
+        const reqId = msg.requestId;
+        const bName = msg.bookName;
+        if (onGetWorldbook) {
+          onGetWorldbook(bName).then((res) => {
+            try {
+              iframeRef.current?.contentWindow?.postMessage(
+                { type: 'tavern:worldbookResponse', requestId: reqId, bookName: bName, found: res.found, entries: res.entries },
+                '*',
+              );
+            } catch {
+              // ignore
+            }
+          });
+        } else {
+          try {
+            iframeRef.current?.contentWindow?.postMessage(
+              { type: 'tavern:worldbookResponse', requestId: reqId, bookName: bName, found: false, entries: [] },
+              '*',
+            );
+          } catch {
+            // ignore
+          }
+        }
       } else if (msg.type === 'tavern:worldbookReplace' && typeof msg.bookName === 'string' && Array.isArray(msg.entries)) {
         onReplaceWorldbook?.(msg.bookName, msg.entries as SandboxWorldbookEntry[]);
       } else if (msg.type === 'tavern:scriptError' && typeof msg.message === 'string') {
@@ -91,7 +118,7 @@ export function TavernFrontendHost({
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [widgetId, onSendSlashOrMessage, onUpdateStatData, onReplaceWorldbook, onScriptError]);
+  }, [widgetId, onSendSlashOrMessage, onUpdateStatData, onGetWorldbook, onReplaceWorldbook, onScriptError]);
 
   // Push live stat updates to mounted iframe without remounting
   useEffect(() => {
@@ -134,6 +161,7 @@ export function TavernFrontendHost({
         storyTurns,
         customExtensions: frontend.customExtensions,
         worldbooks: frontend.worldbooks,
+        worldbookNames: frontend.worldbookNames,
         charWorldbookName: frontend.charWorldbookName,
         charData: frontend.charData,
       });
@@ -148,6 +176,7 @@ export function TavernFrontendHost({
       storyTurns,
       customExtensions: frontend.customExtensions,
       worldbooks: frontend.worldbooks,
+      worldbookNames: frontend.worldbookNames,
       charWorldbookName: frontend.charWorldbookName,
       charData: frontend.charData,
     });
