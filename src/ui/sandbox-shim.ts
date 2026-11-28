@@ -349,6 +349,8 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
   const USER = ${safeJsonForInlineScript(opts.userName || 'User')};
   const CHAT = ${safeJsonForInlineScript(chatMessages)};
   const CURRENT_ID = ${safeJsonForInlineScript(currentId)};
+  let LAST_MESSAGE_ID = CHAT.length > 0 ? CHAT[CHAT.length - 1].message_id : CURRENT_ID;
+  let LAST_PUSHED_STAT_JSON = '';
   const EXT = ${safeJsonForInlineScript(opts.customExtensions ?? {})};
   let WORLDBOOKS = ${safeJsonForInlineScript(opts.liteProseMode ? [] : (opts.worldbooks ?? []))};
   let WORLDBOOK_NAMES = ${safeJsonForInlineScript(
@@ -568,6 +570,7 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
       delete cleaned.stat_data;
     }
     STAT = cleaned;
+    LAST_PUSHED_STAT_JSON = JSON.stringify(STAT);
     try {
       window.parent.postMessage({ widgetId: WID, type: 'tavern:updateStat', statData: STAT }, '*');
     } catch(e){}
@@ -635,7 +638,7 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
     return CURRENT_ID;
   }
   function getLastMessageId(){
-    return CHAT.length > 0 ? CHAT[CHAT.length - 1].message_id : CURRENT_ID;
+    return LAST_MESSAGE_ID;
   }
   function getChatMessages(range){
     if (range === undefined || range === null || range === '') {
@@ -807,19 +810,19 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
   }
   function getWorldbook(name){
     const target = resolveWorldbookName(name);
-    if (!target) return Promise.resolve([]);
+    if (!target) return Promise.reject(new Error('Worldbook name is empty'));
     if (WORLDBOOK_CACHE.has(target)) {
       return Promise.resolve(cloneDeep(WORLDBOOK_CACHE.get(target)));
     }
     if (!window.parent || window.parent === window) {
-      return Promise.resolve([]);
+      return Promise.reject(new Error('Worldbook host bridge unavailable: ' + target));
     }
-    return new Promise(function(resolve){
+    return new Promise(function(resolve, reject){
       const reqId = 'wb-' + (++wbReqSeq) + '-' + Date.now();
       const timer = setTimeout(function(){
         PENDING_WB_REQS.delete(reqId);
-        resolve([]);
-      }, 4000);
+        reject(new Error('Timed out loading worldbook: ' + target));
+      }, 12000);
       PENDING_WB_REQS.set(reqId, {
         bookName: target,
         resolve: function(entries, found){
@@ -828,7 +831,7 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
             WORLDBOOK_CACHE.set(target, cloneDeep(entries));
             resolve(cloneDeep(entries));
           } else {
-            resolve([]);
+            reject(new Error('Worldbook not found: ' + target));
           }
         },
       });
@@ -842,16 +845,27 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
       } catch(e){
         clearTimeout(timer);
         PENDING_WB_REQS.delete(reqId);
-        resolve([]);
+        reject(e);
       }
     });
   }
-  function replaceWorldbook(name, entries){
+  function replaceWorldbook(name, entries, options){
     const target = resolveWorldbookName(name);
-    if (!target) return Promise.resolve([]);
-    const normalized = Array.isArray(entries)
-      ? entries.map(function(e, idx){ return normalizeWorldbookEntryInput(e, 'wb-' + Date.now() + '-' + idx); })
-      : [];
+    if (!target) return Promise.reject(new Error('Worldbook name is required'));
+    if (!Array.isArray(entries)) {
+      return Promise.reject(new Error('replaceWorldbook requires an array of entries'));
+    }
+    if (!WORLDBOOK_CACHE.has(target)) {
+      return Promise.reject(new Error('Worldbook must be loaded via getWorldbook() before replacing: ' + target));
+    }
+    const prevEntries = WORLDBOOK_CACHE.get(target);
+    const allowEmpty = Boolean(options && options.allowEmpty === true);
+    if (entries.length === 0 && Array.isArray(prevEntries) && prevEntries.length > 0 && !allowEmpty) {
+      return Promise.reject(new Error('Refusing to empty non-empty worldbook "' + target + '" without { allowEmpty: true }'));
+    }
+    const normalized = entries.map(function(e, idx){
+      return normalizeWorldbookEntryInput(e, 'wb-' + Date.now() + '-' + idx);
+    });
     WORLDBOOK_CACHE.set(target, cloneDeep(normalized));
     try {
       window.parent.postMessage({
@@ -859,6 +873,7 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
         type: 'tavern:worldbookReplace',
         bookName: target,
         entries: normalized,
+        allowEmpty: allowEmpty,
       }, '*');
     } catch(e){}
     return Promise.resolve(cloneDeep(normalized));
@@ -866,7 +881,6 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
   async function updateWorldbookWith(name, updater){
     const target = resolveWorldbookName(name);
     const current = await getWorldbook(target);
-    if (!target || !WORLDBOOK_CACHE.has(target)) return current;
     if (typeof updater !== 'function') return current;
     const next = await updater(current);
     const finalEntries = Array.isArray(next) ? next : current;
@@ -875,9 +889,6 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
   async function createWorldbookEntries(name, newEntries){
     const target = resolveWorldbookName(name);
     const current = await getWorldbook(target);
-    if (!target || !WORLDBOOK_CACHE.has(target)) {
-      return { worldbook: current, new_entries: [] };
-    }
     const added = (Array.isArray(newEntries) ? newEntries : []).map(function(e, idx){
       return normalizeWorldbookEntryInput(e, 'wb-' + Date.now() + '-' + idx + '-' + Math.random().toString(36).slice(2, 6));
     });
@@ -888,9 +899,6 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
   async function deleteWorldbookEntries(name, predicateOrUids){
     const target = resolveWorldbookName(name);
     const current = await getWorldbook(target);
-    if (!target || !WORLDBOOK_CACHE.has(target)) {
-      return { worldbook: current, deleted_entries: [] };
-    }
     const isFn = typeof predicateOrUids === 'function';
     const uidSet = !isFn && Array.isArray(predicateOrUids) ? new Set(predicateOrUids.map(String)) : null;
     const kept = [];
@@ -901,7 +909,7 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
       if (shouldDelete) deleted.push(entry);
       else kept.push(entry);
     }
-    const saved = await replaceWorldbook(target, kept);
+    const saved = await replaceWorldbook(target, kept, { allowEmpty: deleted.length > 0 });
     return { worldbook: saved, deleted_entries: cloneDeep(deleted) };
   }
 
@@ -1488,28 +1496,64 @@ export function buildSandboxedSrcDoc(rawHtml: string, opts: SandboxShimOptions):
       return;
     }
     if (msg.type === 'tavern:statSync' && msg.statData && typeof msg.statData === 'object') {
-      const prevSnap = makeMvuSnapshot(STAT);
-      STAT = cloneDeep(msg.statData);
-      const incomingSnap = makeMvuSnapshot(STAT);
-      if (!mvuInitEmitted && Object.keys(STAT).length > 0) {
-        mvuInitEmitted = true;
-        runRegisteredSchemas(STAT, true);
-        emitMvuEvent(MVU_EVENTS.VARIABLE_INITIALIZED, makeMvuSnapshot(STAT), CURRENT_ID);
-      } else {
-        emitMvuEvent(MVU_EVENTS.VARIABLE_UPDATE_STARTED, prevSnap, incomingSnap);
-        emitMvuEvent(MVU_EVENTS.BEFORE_MESSAGE_UPDATE, { variables: incomingSnap, message_id: CURRENT_ID });
-        runRegisteredSchemas(STAT, true);
-        const finalSnap = makeMvuSnapshot(STAT);
-        emitMvuEvent(MVU_EVENTS.VARIABLE_UPDATE_ENDED, finalSnap, prevSnap);
+      // P1-1: Sync latest turn into mutable CHAT & LAST_MESSAGE_ID before firing turn events
+      const prevLastId = LAST_MESSAGE_ID;
+      if (msg.latestTurn && typeof msg.latestTurn === 'object' && typeof msg.latestTurn.index === 'number') {
+        const lt = msg.latestTurn;
+        const turnObj = {
+          message_id: lt.index,
+          name: CHAR,
+          role: 'assistant',
+          is_user: false,
+          is_hidden: false,
+          message: typeof lt.narrative === 'string' ? lt.narrative : '',
+          data: { stat_data: cloneDeep(msg.statData) },
+        };
+        const existingIdx = CHAT.findIndex(function(m){ return m.message_id === lt.index; });
+        if (existingIdx >= 0) CHAT[existingIdx] = turnObj;
+        else {
+          CHAT.push(turnObj);
+          CHAT.sort(function(a, b){ return a.message_id - b.message_id; });
+        }
+        if (lt.index > LAST_MESSAGE_ID) LAST_MESSAGE_ID = lt.index;
+      } else if (typeof msg.lastMessageId === 'number' && msg.lastMessageId > LAST_MESSAGE_ID) {
+        LAST_MESSAGE_ID = msg.lastMessageId;
       }
-      eventEmit('VARIABLES_UPDATED', STAT);
-      eventEmit(tavern_events.MESSAGE_RECEIVED, typeof msg.lastMessageId === 'number' ? msg.lastMessageId : getLastMessageId());
-      if (msg.turnCountChanged) {
-        const lid = typeof msg.lastMessageId === 'number' ? msg.lastMessageId : getLastMessageId();
-        eventEmit(tavern_events.GENERATION_ENDED, lid);
-        eventEmit(tavern_events.CHARACTER_MESSAGE_RENDERED, lid);
+
+      const incomingLastId = typeof msg.lastMessageId === 'number' ? msg.lastMessageId : LAST_MESSAGE_ID;
+      const isNewTurn = Boolean(msg.turnCountChanged) && incomingLastId > prevLastId;
+
+      // P1-2: Skip duplicate variable events when incoming statData matches current state or local echo
+      const curStatJson = JSON.stringify(STAT);
+      const incomingStatJson = JSON.stringify(msg.statData);
+      const isLocalEcho = incomingStatJson === LAST_PUSHED_STAT_JSON;
+      if (isLocalEcho) LAST_PUSHED_STAT_JSON = '';
+      const statChanged = incomingStatJson !== curStatJson && !isLocalEcho;
+
+      if (statChanged) {
+        const prevSnap = makeMvuSnapshot(STAT);
+        STAT = cloneDeep(msg.statData);
+        const incomingSnap = makeMvuSnapshot(STAT);
+        if (!mvuInitEmitted && Object.keys(STAT).length > 0) {
+          mvuInitEmitted = true;
+          runRegisteredSchemas(STAT, true);
+          emitMvuEvent(MVU_EVENTS.VARIABLE_INITIALIZED, makeMvuSnapshot(STAT), CURRENT_ID);
+        } else {
+          emitMvuEvent(MVU_EVENTS.VARIABLE_UPDATE_STARTED, prevSnap, incomingSnap);
+          emitMvuEvent(MVU_EVENTS.BEFORE_MESSAGE_UPDATE, { variables: incomingSnap, message_id: incomingLastId });
+          runRegisteredSchemas(STAT, true);
+          const finalSnap = makeMvuSnapshot(STAT);
+          emitMvuEvent(MVU_EVENTS.VARIABLE_UPDATE_ENDED, finalSnap, prevSnap);
+        }
+        eventEmit('VARIABLES_UPDATED', STAT);
       }
-      postH();
+
+      if (isNewTurn) {
+        eventEmit(tavern_events.MESSAGE_RECEIVED, incomingLastId);
+        eventEmit(tavern_events.GENERATION_ENDED, incomingLastId);
+        eventEmit(tavern_events.CHARACTER_MESSAGE_RENDERED, incomingLastId);
+      }
+      if (statChanged || isNewTurn) postH();
     }
   });
 

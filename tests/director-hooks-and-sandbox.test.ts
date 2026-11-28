@@ -265,6 +265,25 @@ describe('Director Mode multi-agent hook lifecycle', () => {
       expect(afterReal.pendingDirectorInput).toBe('今晚我们去哪？');
       expect(afterReal.lastUserInputForCommit).toBe('今晚我们去哪？');
       expect(afterReal.stagedSidePaneInput).toBeUndefined();
+
+      // P0-3: Orphaned or expired side-pane placeholder MUST be rejected (never stored as pendingDirectorInput)
+      const expiredPlaceholder = handlePreInvocation(
+        { conversationId: 'fresh-win', lastUserInput: '第 #2 楼 · 开始演绎', invocationNum: 1 },
+        storage,
+      );
+      expect(expiredPlaceholder.injectSteps).toBeUndefined();
+      expect(storage.getSession('default').pendingDirectorInput).toBe('今晚我们去哪？');
+
+      const sharedExpired = storage.getSession('default');
+      sharedExpired.stagedSidePaneInput = 'TOO OLD';
+      sharedExpired.stagedSidePaneInputAt = Date.now() - 400_000;
+      storage.saveSession(sharedExpired);
+      const stalePlaceholder = handlePreInvocation(
+        { conversationId: 'fresh-win', lastUserInput: '第 #3 楼 · 开始演绎', invocationNum: 1 },
+        storage,
+      );
+      expect(stalePlaceholder.injectSteps).toBeUndefined();
+      expect(storage.getSession('default').pendingDirectorInput).toBe('今晚我们去哪？');
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -505,9 +524,89 @@ describe('sandbox-shim inline script escape safety', () => {
     expect(fetched).toHaveLength(1);
     expect(fetched[0].content).toHaveLength(1000);
 
-    // Missing book must NOT trigger tavern:worldbookReplace when createWorldbookEntries is called
-    const missRes = await TH.createWorldbookEntries('MissingBook', [{ name: 'ShouldNotOverwrite', content: 'x' }]);
-    expect(missRes.new_entries).toHaveLength(0);
+    // P0-1: replaceWorldbook(undefined) and replaceWorldbook([]) on non-empty book MUST reject without posting
+    await expect(TH.replaceWorldbook('HugeBook', undefined)).rejects.toThrow(/requires an array/);
+    await expect(TH.replaceWorldbook('HugeBook', [])).rejects.toThrow(/Refusing to empty/);
+    expect(posted.some((m) => m.type === 'tavern:worldbookReplace' && m.bookName === 'HugeBook')).toBe(false);
+    expect((await TH.getWorldbook('HugeBook'))).toHaveLength(1);
+
+    // P0-2: Missing / unloaded worldbook MUST reject on getWorldbook and block blind replaceWorldbook
+    await expect(TH.getWorldbook('MissingBook')).rejects.toThrow(/Worldbook not found/);
+    await expect(TH.replaceWorldbook('MissingBook', [{ name: 'Blind', content: 'x' }])).rejects.toThrow(/must be loaded/);
+    await expect(TH.createWorldbookEntries('MissingBook', [{ name: 'ShouldNotOverwrite', content: 'x' }])).rejects.toThrow(/Worldbook not found/);
     expect(posted.some((m) => m.type === 'tavern:worldbookReplace' && m.bookName === 'MissingBook')).toBe(false);
+  });
+
+  it('syncs mutable CHAT/LAST_MESSAGE_ID on new turns (P1-1) and suppresses duplicate statSync/echo events (P1-2)', async () => {
+    const vm = await import('node:vm');
+    const doc = buildSandboxedSrcDoc('<div></div>', {
+      widgetId: 'w-p1',
+      charName: 'Alice',
+      userName: 'Master',
+      statData: { hp: 100 },
+      currentMessageId: 2,
+      storyTurns: [{ index: 1, narrative: 'Turn 1' }, { index: 2, narrative: 'Turn 2' }],
+    });
+    const firstOpen = doc.indexOf('<script>');
+    const firstClose = doc.indexOf('</script>');
+    const shimJs = doc.slice(firstOpen + '<script>'.length, firstClose);
+
+    const msgListeners: Array<(evt: { data: unknown }) => void> = [];
+    const fakeWindow: Record<string, unknown> = {
+      parent: { postMessage: () => {} },
+      addEventListener: (type: string, fn: (evt: { data: unknown }) => void) => {
+        if (type === 'message') msgListeners.push(fn);
+      },
+      innerHeight: 600,
+      scrollY: 0,
+      getComputedStyle: () => ({ paddingBottom: '0', marginBottom: '0', position: 'static', display: 'block', getPropertyValue: () => '' }),
+    };
+    const sandbox = vm.createContext({
+      window: fakeWindow,
+      document: { readyState: 'complete', body: { children: [], offsetHeight: 100 }, addEventListener: () => {}, dispatchEvent: () => {}, querySelectorAll: () => [] },
+      console, setTimeout, clearTimeout, Promise, Map, Set, Symbol, JSON, Object, Array, Number, String, Boolean, Math, Date, RegExp,
+      Element: class {}, NodeList: class {}, HTMLCollection: class {}, Event: class { constructor(public type: string) {} },
+    });
+    vm.runInContext(shimJs, sandbox);
+
+    const TH = fakeWindow.TavernHelper as Record<string, any>;
+    let msgRecvCount = 0;
+    let varUpdCount = 0;
+    let seenTurn3InEvent = '';
+    TH.eventOn(TH.tavern_events.MESSAGE_RECEIVED, (id: number) => {
+      msgRecvCount += 1;
+      seenTurn3InEvent = TH.getChatMessages(id)?.[0]?.message ?? '';
+    });
+    TH.eventOn('VARIABLES_UPDATED', () => {
+      varUpdCount += 1;
+    });
+
+    // P1-2: Local variable write fires VARIABLES_UPDATED once; parent echo with identical statData MUST NOT re-fire VARIABLES_UPDATED or MESSAGE_RECEIVED
+    TH.insertOrAssignVariables('hp', 85);
+    expect(varUpdCount).toBe(1);
+    for (const l of msgListeners) {
+      l({ data: { type: 'tavern:statSync', statData: { hp: 85 }, turnCountChanged: false, lastMessageId: 2 } });
+    }
+    expect(varUpdCount).toBe(1);
+    expect(msgRecvCount).toBe(0);
+
+    // P1-1: New turn sync updates CHAT & LAST_MESSAGE_ID BEFORE firing MESSAGE_RECEIVED
+    for (const l of msgListeners) {
+      l({
+        data: {
+          type: 'tavern:statSync',
+          statData: { hp: 70 },
+          turnCountChanged: true,
+          lastMessageId: 3,
+          latestTurn: { index: 3, narrative: 'Turn 3 prose' },
+        },
+      });
+    }
+    expect(msgRecvCount).toBe(1);
+    expect(varUpdCount).toBe(2);
+    expect(TH.getLastMessageId()).toBe(3);
+    expect(TH.substitudeMacros('{{lastMessageId}}')).toBe('3');
+    expect(seenTurn3InEvent).toBe('Turn 3 prose');
+    expect(TH.getChatMessages(-1)[0].message).toBe('Turn 3 prose');
   });
 });

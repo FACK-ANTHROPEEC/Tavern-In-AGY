@@ -35,7 +35,7 @@ interface FloorRendererProps {
   onSetInput?: (text: string) => void;
   onUpdateStatData?: (nextStatData: Record<string, unknown>) => void;
   onGetWorldbook?: (bookName: string) => Promise<{ found: boolean; entries: SandboxWorldbookEntry[] }>;
-  onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[]) => void;
+  onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[], allowEmpty?: boolean) => void;
   onSelectGreeting?: (index: number) => void;
 }
 
@@ -110,7 +110,7 @@ function InlineRegexWidget({
   onSetInput?: (text: string) => void;
   onUpdateStatData?: (nextStatData: Record<string, unknown>) => void;
   onGetWorldbook?: (bookName: string) => Promise<{ found: boolean; entries: SandboxWorldbookEntry[] }>;
-  onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[]) => void;
+  onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[], allowEmpty?: boolean) => void;
   onSelectGreeting?: (index: number) => void;
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -162,7 +162,7 @@ function InlineRegexWidget({
           }
         }
       } else if (msg.type === 'tavern:worldbookReplace' && typeof msg.bookName === 'string' && Array.isArray(msg.entries)) {
-        onReplaceWorldbook?.(msg.bookName, msg.entries as SandboxWorldbookEntry[]);
+        onReplaceWorldbook?.(msg.bookName, msg.entries as SandboxWorldbookEntry[], Boolean(msg.allowEmpty));
       }
     };
     window.addEventListener('message', onMessage);

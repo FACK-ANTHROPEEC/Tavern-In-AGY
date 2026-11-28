@@ -14,7 +14,7 @@ interface MvuZodRuntimeHostProps {
   storyTurns: Array<{ index: number; userMessage?: string; narrative: string }>;
   onUpdateStatData: (nextStatData: Record<string, unknown>) => void;
   onGetWorldbook?: (bookName: string) => Promise<{ found: boolean; entries: SandboxWorldbookEntry[] }>;
-  onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[]) => void;
+  onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[], allowEmpty?: boolean) => void;
   onSchemaCountChange?: (count: number) => void;
   onScriptError?: (scriptName: string, message: string) => void;
 }
@@ -102,7 +102,7 @@ export function MvuZodRuntimeHost({
           }
         }
       } else if (msg.type === 'tavern:worldbookReplace' && typeof msg.bookName === 'string' && Array.isArray(msg.entries)) {
-        onReplaceWorldbook?.(msg.bookName, msg.entries as SandboxWorldbookEntry[]);
+        onReplaceWorldbook?.(msg.bookName, msg.entries as SandboxWorldbookEntry[], Boolean(msg.allowEmpty));
       } else if (msg.type === 'tavern:scriptError' && typeof msg.message === 'string') {
         onScriptError?.(typeof msg.scriptName === 'string' ? msg.scriptName : 'script', msg.message);
       }
@@ -118,10 +118,11 @@ export function MvuZodRuntimeHost({
     prevTurnCountRef.current = storyTurns.length;
     if (curJson === lastPushedJsonRef.current && !turnCountChanged) return;
     lastPushedJsonRef.current = curJson;
-    const lastMessageId = storyTurns.length > 0 ? storyTurns[storyTurns.length - 1].index : 0;
+    const latestTurn = storyTurns.length > 0 ? storyTurns[storyTurns.length - 1] : null;
+    const lastMessageId = latestTurn ? latestTurn.index : 0;
     try {
       iframeRef.current?.contentWindow?.postMessage(
-        { type: 'tavern:statSync', statData, turnCountChanged, lastMessageId },
+        { type: 'tavern:statSync', statData, turnCountChanged, lastMessageId, latestTurn },
         '*',
       );
     } catch {

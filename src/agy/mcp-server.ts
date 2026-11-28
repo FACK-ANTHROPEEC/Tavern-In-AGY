@@ -1030,10 +1030,11 @@ server.registerTool(
     inputSchema: {
       bookName: z.string(),
       entries: z.array(z.record(z.string(), z.unknown())),
+      allowEmpty: z.boolean().optional(),
     },
     _meta: APP_ONLY_META,
   },
-  async ({ bookName, entries }) => {
+  async ({ bookName, entries, allowEmpty }) => {
     const config = storage.getConfig();
     const normalizedEntries = entries.map((e, idx) => normalizeSandboxEntryToLorebookEntry(e, idx));
     const card = config.activeCardId ? storage.getCard(config.activeCardId) : null;
@@ -1042,6 +1043,12 @@ server.registerTool(
       card?.embeddedLorebook &&
       (card.embeddedLorebook.name === bookName || card.embeddedLorebook.id === bookName)
     ) {
+      if (normalizedEntries.length === 0 && card.embeddedLorebook.entries.length > 0 && allowEmpty !== true) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `refused to wipe non-empty embedded worldbook ${card.embeddedLorebook.name} without allowEmpty=true` }],
+        };
+      }
       card.embeddedLorebook.entries = normalizedEntries;
       storage.saveCard(card);
       return {
@@ -1052,6 +1059,12 @@ server.registerTool(
     const allBooks = storage.listLorebooks();
     const matched = allBooks.find((b) => b.name === bookName || b.id === bookName);
     if (matched) {
+      if (normalizedEntries.length === 0 && matched.entries.length > 0 && allowEmpty !== true) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `refused to wipe non-empty worldbook ${matched.name} without allowEmpty=true` }],
+        };
+      }
       matched.entries = normalizedEntries;
       storage.saveLorebook(matched);
       return {

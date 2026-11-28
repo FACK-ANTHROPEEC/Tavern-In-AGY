@@ -40,7 +40,7 @@ interface TavernFrontendHostProps {
   onSendSlashOrMessage: (text: string) => void;
   onUpdateStatData: (nextStatData: Record<string, unknown>) => void;
   onGetWorldbook?: (bookName: string) => Promise<{ found: boolean; entries: SandboxWorldbookEntry[] }>;
-  onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[]) => void;
+  onReplaceWorldbook?: (bookName: string, entries: SandboxWorldbookEntry[], allowEmpty?: boolean) => void;
   onScriptError?: (scriptName: string, message: string) => void;
 }
 
@@ -107,7 +107,7 @@ export function TavernFrontendHost({
           }
         }
       } else if (msg.type === 'tavern:worldbookReplace' && typeof msg.bookName === 'string' && Array.isArray(msg.entries)) {
-        onReplaceWorldbook?.(msg.bookName, msg.entries as SandboxWorldbookEntry[]);
+        onReplaceWorldbook?.(msg.bookName, msg.entries as SandboxWorldbookEntry[], Boolean(msg.allowEmpty));
       } else if (msg.type === 'tavern:scriptError' && typeof msg.message === 'string') {
         const name = typeof msg.scriptName === 'string' ? msg.scriptName : 'script';
         setHostLog(`脚本异常 [${name}]：${msg.message}`);
@@ -125,10 +125,11 @@ export function TavernFrontendHost({
     if (mountMode === 'none') return;
     const turnCountChanged = storyTurns.length !== prevTurnCountRef.current;
     prevTurnCountRef.current = storyTurns.length;
-    const lastMessageId = storyTurns.length > 0 ? storyTurns[storyTurns.length - 1].index : 0;
+    const latestTurn = storyTurns.length > 0 ? storyTurns[storyTurns.length - 1] : null;
+    const lastMessageId = latestTurn ? latestTurn.index : 0;
     try {
       iframeRef.current?.contentWindow?.postMessage(
-        { type: 'tavern:statSync', statData, turnCountChanged, lastMessageId },
+        { type: 'tavern:statSync', statData, turnCountChanged, lastMessageId, latestTurn },
         '*',
       );
     } catch {

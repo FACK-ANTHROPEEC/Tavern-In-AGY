@@ -730,10 +730,13 @@ export function AppView() {
     [],
   );
 
-  const handleReplaceWorldbook = useCallback((bookName: string, entries: SandboxWorldbookEntry[]) => {
-    callTool('story_app_replace_worldbook_entries', { bookName, entries });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const handleReplaceWorldbook = useCallback(
+    (bookName: string, entries: SandboxWorldbookEntry[], allowEmpty?: boolean) => {
+      callTool('story_app_replace_worldbook_entries', { bookName, entries, allowEmpty });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [],
+  );
 
   const handleScriptError = useCallback((scriptName: string, message: string) => {
     setScriptErrors((prev) => {

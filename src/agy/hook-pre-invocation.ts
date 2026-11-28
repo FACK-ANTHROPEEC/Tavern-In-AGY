@@ -221,6 +221,9 @@ export function handlePreInvocation(
       shared.pendingDirectorInput = staged;
       shared.pendingDirectorInputAt = shared.stagedSidePaneInputAt ?? Date.now();
       shared.lastUserInputForCommit = staged;
+    } else if (isFromSidePanePlaceholder) {
+      // P0-3 guard: an orphaned/expired side-pane placeholder must NEVER be treated as literal story input
+      return {};
     } else {
       // User typed a real message directly in the main chatbox: never let stale stagedSidePaneInput hijack it
       if (shared.stagedSidePaneInput || shared.stagedSidePaneInputAt) {
