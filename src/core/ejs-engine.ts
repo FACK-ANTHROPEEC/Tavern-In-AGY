@@ -11,6 +11,9 @@ export interface EjsTemplateContext {
   userName?: string;
 }
 
+const UNSAFE_VAR_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const RESERVED_VIEW_KEYS = new Set(['stat_data', 'display_data', 'delta_data']);
+
 /**
  * Generic ST-Prompt-Template (EJS) renderer.
  * Supports `<% ... %>`, `<%- ... %>`, `<%_ ... _%>`, `print(...)`, `@@preprocessing`,
@@ -24,9 +27,16 @@ export function renderEjsTemplate(template: string, ctx: EjsTemplateContext): st
   // Strip ST-Prompt-Template `@@preprocessing` marker line if present
   const cleaned = template.replace(/^\s*@@preprocessing\s*\r?\n?/i, '');
 
+  const variables: Record<string, unknown> = {
+    ...ctx.vars,
+    stat_data: ctx.statData,
+    display_data: ctx.statData,
+    delta_data: {},
+  };
+
   const getvar = (key: string, opts?: { defaults?: unknown; scope?: string }): unknown => {
     const trimmed = String(key || '').trim();
-    if (!trimmed) return opts?.defaults;
+    if (!trimmed || UNSAFE_VAR_KEYS.has(trimmed)) return opts?.defaults;
 
     // 1. Direct `stat_data` / `display_data` / `delta_data`
     if (trimmed === 'stat_data' || trimmed === 'display_data') {
@@ -47,7 +57,7 @@ export function renderEjsTemplate(template: string, ctx: EjsTemplateContext): st
     }
 
     // 2. Flat string vars
-    if (trimmed in ctx.vars) {
+    if (Object.hasOwn(ctx.vars, trimmed)) {
       return ctx.vars[trimmed];
     }
 
@@ -60,16 +70,24 @@ export function renderEjsTemplate(template: string, ctx: EjsTemplateContext): st
 
   const setvar = (key: string, value: unknown): void => {
     const trimmed = String(key || '').trim();
-    if (!trimmed) return;
+    if (!trimmed || UNSAFE_VAR_KEYS.has(trimmed)) return;
     if (trimmed === 'stat_data' && value && typeof value === 'object' && !Array.isArray(value)) {
-      Object.assign(ctx.statData, value);
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        if (!UNSAFE_VAR_KEYS.has(k)) {
+          ctx.statData[k] = v;
+        }
+      }
       return;
     }
     if (trimmed.startsWith('stat_data.')) {
       setByDotPath(ctx.statData, trimmed.slice('stat_data.'.length), value);
       return;
     }
-    ctx.vars[trimmed] = String(value ?? '');
+    const strVal = String(value ?? '');
+    ctx.vars[trimmed] = strVal;
+    if (!RESERVED_VIEW_KEYS.has(trimmed)) {
+      variables[trimmed] = strVal;
+    }
   };
 
   const getwi = (title: string): string => {
@@ -90,13 +108,6 @@ export function renderEjsTemplate(template: string, ctx: EjsTemplateContext): st
     personality: ctx.card?.personality ?? '',
     scenario: ctx.card?.scenario ?? '',
   });
-
-  const variables = {
-    ...ctx.vars,
-    stat_data: ctx.statData,
-    display_data: ctx.statData,
-    delta_data: {},
-  };
 
   try {
     return ejs.render(
