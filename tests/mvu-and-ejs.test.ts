@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { z as zod4 } from 'zod4';
-import { applyMvuUpdates, extractInitVarFromLorebooks } from '../src/core/mvu-engine.js';
+import { applyMvuUpdates, extractInitVarFromLorebooks, getByDotPath, setByDotPath, unsetByDotPath } from '../src/core/mvu-engine.js';
 import { buildProseBeautifierSrcDoc, isProseBeautifierScript } from '../src/ui/sandbox-shim.js';
 import { renderEjsTemplate } from '../src/core/ejs-engine.js';
 import { evaluateMacros } from '../src/core/macro-engine.js';
@@ -154,6 +154,44 @@ describe('EJS ST-Prompt-Template engine', () => {
       vars: {},
     });
     expect(out.trim()).toBe('熔炉已开启');
+  });
+
+  it('syncs setvar() updates to variables immediately within the same render pass', () => {
+    const vars: Record<string, string> = {};
+    const out = renderEjsTemplate(
+      `<% setvar('mood', 'calm'); %><%= variables.mood %>|<%= getvar('mood') %>`,
+      {
+        statData: {},
+        vars,
+      },
+    );
+    expect(out).toBe('calm|calm');
+    expect(vars.mood).toBe('calm');
+  });
+
+  it('prevents inherited prototype lookups and prototype pollution in getvar/setvar and dot-path helpers', () => {
+    const vars: Record<string, string> = {};
+    const statData: Record<string, unknown> = { a: 1 };
+
+    const out = renderEjsTemplate(
+      `<% setvar('__proto__', 'bad'); setvar('stat_data.__proto__.polluted', 'yes'); %><%= getvar('toString', { defaults: 'SAFE' }) %>|<%= getvar('constructor', { defaults: 'SAFE2' }) %>`,
+      {
+        statData,
+        vars,
+      },
+    );
+
+    expect(out).toBe('SAFE|SAFE2');
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(Object.hasOwn(vars, '__proto__')).toBe(false);
+
+    expect(getByDotPath({ a: 1 }, 'toString')).toBeUndefined();
+    expect(getByDotPath({ a: 1 }, 'constructor')).toBeUndefined();
+    expect(unsetByDotPath({}, 'toString')).toBe(false);
+
+    const target: Record<string, unknown> = {};
+    setByDotPath(target, '__proto__.polluted', 'yes');
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });
 

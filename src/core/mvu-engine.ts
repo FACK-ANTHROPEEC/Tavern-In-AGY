@@ -1,6 +1,8 @@
 import { load as parseYaml } from 'js-yaml';
 import type { Lorebook } from './types.js';
 
+const UNSAFE_MERGE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 export function cloneDeep<T>(value: T): T {
   if (value === null || value === undefined || typeof value !== 'object') {
     return value;
@@ -85,13 +87,16 @@ export function getByDotPath(obj: unknown, dotPath: string): unknown {
   const parts = parseLodashPath(dotPath);
   let cur: unknown = obj;
   for (const part of parts) {
+    if (UNSAFE_MERGE_KEYS.has(part)) return undefined;
     if (cur === null || cur === undefined || typeof cur !== 'object') {
       return undefined;
     }
     if (Array.isArray(cur) && isArrayIndexSegment(part)) {
       cur = cur[Number(part)];
-    } else {
+    } else if (Object.hasOwn(cur, part)) {
       cur = (cur as Record<string, unknown>)[part];
+    } else {
+      return undefined;
     }
   }
   return cur;
@@ -100,6 +105,7 @@ export function getByDotPath(obj: unknown, dotPath: string): unknown {
 export function setByDotPath(obj: Record<string, unknown>, dotPath: string, value: unknown): Record<string, unknown> {
   const parts = parseLodashPath(dotPath);
   if (parts.length === 0) return obj;
+  if (parts.some((seg) => UNSAFE_MERGE_KEYS.has(seg))) return obj;
   let cur: unknown = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     const seg = parts[i];
@@ -112,7 +118,7 @@ export function setByDotPath(obj: Record<string, unknown>, dotPath: string, valu
       cur = cur[idx];
     } else if (cur && typeof cur === 'object') {
       const rec = cur as Record<string, unknown>;
-      if (rec[seg] === null || rec[seg] === undefined || typeof rec[seg] !== 'object') {
+      if (!Object.hasOwn(rec, seg) || rec[seg] === null || rec[seg] === undefined || typeof rec[seg] !== 'object') {
         rec[seg] = isArrayIndexSegment(nextSeg) ? [] : {};
       }
       cur = rec[seg];
@@ -132,13 +138,18 @@ export function setByDotPath(obj: Record<string, unknown>, dotPath: string, valu
 export function unsetByDotPath(obj: Record<string, unknown>, dotPath: string): boolean {
   const parts = parseLodashPath(dotPath);
   if (parts.length === 0) return false;
+  if (parts.some((seg) => UNSAFE_MERGE_KEYS.has(seg))) return false;
   let cur: unknown = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     if (!cur || typeof cur !== 'object') return false;
     const seg = parts[i];
-    cur = Array.isArray(cur) && isArrayIndexSegment(seg)
-      ? cur[Number(seg)]
-      : (cur as Record<string, unknown>)[seg];
+    if (Array.isArray(cur) && isArrayIndexSegment(seg)) {
+      cur = cur[Number(seg)];
+    } else if (Object.hasOwn(cur, seg)) {
+      cur = (cur as Record<string, unknown>)[seg];
+    } else {
+      return false;
+    }
   }
   if (!cur || typeof cur !== 'object') return false;
   const last = parts[parts.length - 1];
@@ -148,7 +159,7 @@ export function unsetByDotPath(obj: Record<string, unknown>, dotPath: string): b
     cur.splice(idx, 1);
     return true;
   }
-  if (last in (cur as Record<string, unknown>)) {
+  if (Object.hasOwn(cur, last)) {
     delete (cur as Record<string, unknown>)[last];
     return true;
   }
@@ -259,8 +270,6 @@ function tryParseJsonObject(raw: string): Record<string, unknown> | null {
   }
   return null;
 }
-
-const UNSAFE_MERGE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 function deepMergeObjects(
   target: Record<string, unknown>,
